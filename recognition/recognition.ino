@@ -17,6 +17,7 @@ void loop() {
     digitalWrite(pin_S3, bitRead(channel, 3));
     delayMicroseconds(5); 
 
+    analogRead(pin_SIG);
     int analogValue = analogRead(pin_SIG);
     Serial.print(analogValue);
     Serial.print(" ");

@@ -63,7 +63,7 @@ void playNote(float freq, int duration_ms) {
     
     for (int j = 0; j < chunk_size; j++) {
       // 振幅設為 4000.0，保護 100uF 電容不被抽乾
-      sample_buffer[j] = (int16_t)(sin(phase) * 4000.0); 
+      sample_buffer[j] = (int16_t)(sin(phase) * 9000.0); 
       
       phase += phase_increment;
       if (phase >= TWO_PI) phase -= TWO_PI;
