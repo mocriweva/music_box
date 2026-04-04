@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>8-Bit 電子音樂盒樂譜編譯器 (動態進度追蹤版)</title>
+    <title>8-Bit 電子音樂盒樂譜編譯器 (核心修復與分頁列印版)</title>
     <script src="https://unpkg.com/@tonejs/midi"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -11,80 +11,53 @@
         .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h1 { color: #333; margin-bottom: 5px; }
         .subtitle { color: #666; font-size: 0.9em; margin-bottom: 20px; }
-        .upload-area { border: 2px dashed #007bff; padding: 30px; text-align: center; border-radius: 8px; margin-bottom: 20px; background-color: #f8fbff; transition: 0.3s; }
-        .upload-area:hover { background-color: #e2efff; }
         .controls, .export-controls, .progress-area { margin-top: 15px; display: flex; gap: 15px; align-items: center; background: #f1f1f1; padding: 15px; border-radius: 5px; flex-wrap: wrap;}
         button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; background-color: #28a745; color: white; font-weight: bold; }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
-        button:hover:not(:disabled) { background-color: #218838; }
         #stop-btn { background-color: #dc3545; }
-        #stop-btn:hover:not(:disabled) { background-color: #c82333; }
         #pdf-btn { background-color: #007bff; }
         #status { font-weight: bold; color: #0056b3; margin-top: 10px; }
-        #detected-range { font-weight: bold; color: #d63384; margin-top: 5px; font-size: 1.1em; }
-        
-        /* 🌟 新增：進度條專屬樣式 */
         .progress-area { background: #fff3cd; border-left: 5px solid #ffc107; width: 100%; box-sizing: border-box; display: none; flex-direction: column; align-items: flex-start; gap: 5px;}
         progress { width: 100%; height: 20px; }
-        
-        /* 卷軸容器設定平滑捲動 */
-        #canvas-container { overflow-x: auto; border: 1px solid #ccc; margin-top: 20px; background-color: #fff; scroll-behavior: smooth; }
+        #canvas-container { overflow-x: auto; border: 1px solid #ccc; margin-top: 20px; background-color: #fff; scroll-behavior: smooth; max-height: 500px; overflow-y: auto;}
         canvas { display: block; }
         .input-group { display: flex; flex-direction: column; gap: 5px; font-weight: bold; color: #444; }
-        input[type="number"] { width: 60px; padding: 5px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
-        select { padding: 8px; font-size: 14px; border-radius: 4px; border: 1px solid #ccc; max-width: 300px;}
+        input[type="number"], select { padding: 5px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>🎛️ 8-Bit 紙帶樂譜編譯器 (多軌分離版)</h1>
-    <div class="subtitle">內建音軌過濾器與自動音域鎖定演算法</div>
+    <h1>🎛️ 8-Bit 紙帶樂譜編譯器</h1>
+    <div class="subtitle">時序校正、音效安全加固、分段渲染防崩潰機制</div>
     
-    <div class="upload-area">
-        <p>請選擇或將 MIDI 檔案拖曳至此處</p>
-        <input type="file" id="midi-upload" accept=".mid,.midi">
-    </div>
-
     <div class="controls" style="background-color: #e2efff; border-left: 5px solid #007bff;">
-        <div class="input-group" style="flex-grow: 1;">
-            <label>🎧 1. 請選擇你要印出哪一條音軌 (主旋律)：</label>
-            <select id="track-select" disabled>
-                <option>等待上傳 MIDI...</option>
-            </select>
-        </div>
+        <input type="file" id="midi-upload" accept=".mid,.midi">
+        <select id="track-select" disabled><option>等待上傳 MIDI...</option></select>
     </div>
 
     <div id="status">系統就緒，等待檔案上傳...</div>
-    <div id="detected-range"></div>
     
     <div class="controls">
-        <button id="play-btn" disabled>▶️ 2. 預覽實體聲音</button>
+        <button id="play-btn" disabled>▶️ 預覽實體聲音</button>
         <button id="stop-btn" disabled>⏹️ 停止</button>
-        <label>⚙️ 試聽轉速 (BPM): <input type="range" id="speed-slider" min="50" max="600" value="250" dir="rtl"></label>
+        <label>⚙️ 播放速度 (BPM): <input type="range" id="speed-slider" min="60" max="300" value="120"> <span id="bpm-val">120</span></label>
     </div>
 
     <div class="progress-area" id="progress-area">
-        <div style="font-weight: bold; color: #856404;">
-            🎵 播放進度：<span id="progress-text">0 / 0</span>
-        </div>
+        <div style="font-weight: bold; color: #856404;">🎵 播放進度：<span id="progress-text">0 / 0</span></div>
         <progress id="playback-progress" value="0" max="100"></progress>
     </div>
 
     <div class="export-controls">
-        <div class="input-group">
-            <label>X軸：音符孔距 (mm)</label>
-            <div><input type="number" id="spacing-x-mm" min="2" max="50" step="0.5" value="5"> mm</div>
-        </div>
-        <div class="input-group">
-            <label>Y軸：軌道間距 (mm)</label>
-            <div><input type="number" id="spacing-y-mm" min="2" max="30" step="0.5" value="10"> mm</div>
-        </div>
-        <button id="pdf-btn" disabled>📄 3. 匯出實體紙帶 (PDF)</button>
+        <div class="input-group"><label>X孔距 (mm)</label><input type="number" id="spacing-x-mm" min="2" max="20" step="0.5" value="5"></div>
+        <div class="input-group"><label>Y軌距 (mm)</label><input type="number" id="spacing-y-mm" min="2" max="20" step="0.5" value="10"></div>
+        <div class="input-group"><label>每行最大網格數</label><input type="number" id="steps-per-row" min="50" max="500" step="10" value="150"></div>
+        <button id="pdf-btn" disabled>📄 匯出 A4 分頁紙帶 (PDF)</button>
     </div>
 
     <div id="canvas-container">
-        <canvas id="tapeCanvas" height="300"></canvas>
+        <canvas id="tapeCanvas"></canvas>
     </div>
 </div>
 
@@ -95,26 +68,21 @@ let lut = [];
 let paperTapeData = []; 
 const MM_TO_PX = 3.779528;
 
+// 🌟 修正 2：延遲實例化 Tone.js，宣告為 null
+let synth = null;
+let isPlaying = false;
+
 const allWhiteKeys = [
     24, 26, 28, 29, 31, 33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 52, 53, 55, 57, 59, 
     60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84, 86, 88, 89, 91, 93, 95, 
     96, 98, 100, 101, 103, 105, 107, 108
 ];
 
-const synth = new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: "sine" },
-    envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1 }
-}).toDestination();
-let isPlaying = false;
-
 function initLUT() {
-    lut = []; 
-    lut.push([]); 
+    lut = []; lut.push([]); 
     allowedNotes.forEach(n => lut.push([n])); 
     for (let i = 0; i < allowedNotes.length; i++) {
-        for (let j = i + 1; j < allowedNotes.length; j++) {
-            lut.push([allowedNotes[i], allowedNotes[j]]); 
-        }
+        for (let j = i + 1; j < allowedNotes.length; j++) { lut.push([allowedNotes[i], allowedNotes[j]]); }
     }
 }
 
@@ -122,37 +90,24 @@ function getLookupIndex(activeNotes) {
     if (activeNotes.length === 0) return 0;
     let notes = activeNotes.slice(0, 2).sort((a,b) => a-b); 
     for (let i = 0; i < lut.length; i++) {
-        if (lut[i].length === notes.length && lut[i].every((val, index) => val === notes[index])) {
-            return i;
-        }
+        if (lut[i].length === notes.length && lut[i].every((val, index) => val === notes[index])) return i;
     }
     return 0; 
 }
 
 function smartMapNote(midiNote) {
-    let minLimit = allowedNotes[0];
-    let maxLimit = allowedNotes[14];
     let pitchClass = midiNote % 12;
     const pitchToWhite = [0, 0, 2, 2, 4, 5, 5, 7, 7, 9, 9, 11]; 
-    let mappedPitchClass = pitchToWhite[pitchClass];
-    let octave = Math.floor(midiNote / 12) - 1;
-    let minOctave = Math.floor(minLimit / 12) - 1;
-    if (octave < minOctave) octave = minOctave;  
-    let finalNote = (octave + 1) * 12 + mappedPitchClass;
-    while (finalNote > maxLimit) finalNote -= 12; 
-    while (finalNote < minLimit) finalNote += 12; 
+    let finalNote = (Math.max(Math.floor(midiNote / 12) - 1, Math.floor(allowedNotes[0] / 12) - 1) + 1) * 12 + pitchToWhite[pitchClass];
+    while (finalNote > allowedNotes[14]) finalNote -= 12; 
+    while (finalNote < allowedNotes[0]) finalNote += 12; 
     return finalNote;
 }
 
 document.getElementById('midi-upload').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
-    document.getElementById('status').innerText = "解析 MIDI 音軌中...";
-    document.getElementById('play-btn').disabled = true;
-    document.getElementById('pdf-btn').disabled = true;
-    document.getElementById('progress-area').style.display = 'none'; // 隱藏進度條
-    isPlaying = false;
+    document.getElementById('play-btn').disabled = true; document.getElementById('pdf-btn').disabled = true; isPlaying = false;
     
     const reader = new FileReader();
     reader.onload = async function(e) {
@@ -166,237 +121,187 @@ document.getElementById('midi-upload').addEventListener('change', async (e) => {
                 hasTracks = true;
                 let option = document.createElement('option');
                 option.value = index;
-                let instName = track.instrument ? track.instrument.name : "未知樂器";
-                let trackName = track.name ? track.name : `音軌 ${index}`;
-                let drumWarning = (track.channel === 9) ? " ⚠️(爵士鼓)" : "";
-                option.text = `[軌道 ${index}] ${trackName} - ${instName} (${track.notes.length} 個音) ${drumWarning}`;
+                option.text = `[軌道 ${index}] ${track.name || 'Unknown'} (${track.notes.length} notes) ${(track.channel === 9) ? "⚠️(Drum)" : ""}`;
                 trackSelect.appendChild(option);
             }
         });
-
-        if (hasTracks) {
-            trackSelect.disabled = false;
-            processMidiTrack(parseInt(trackSelect.value));
-        } else {
-            document.getElementById('status').innerText = "❌ 此 MIDI 檔案沒有有效音符";
-            trackSelect.innerHTML = '<option>檔案無效</option>';
-        }
+        if (hasTracks) { trackSelect.disabled = false; processMidiTrack(parseInt(trackSelect.value)); }
     };
     reader.readAsArrayBuffer(file);
 });
 
-document.getElementById('track-select').addEventListener('change', (e) => {
-    processMidiTrack(parseInt(e.target.value));
-});
+document.getElementById('track-select').addEventListener('change', (e) => processMidiTrack(parseInt(e.target.value)));
+document.getElementById('speed-slider').addEventListener('input', (e) => document.getElementById('bpm-val').innerText = e.target.value);
 
 function processMidiTrack(trackIndex) {
-    if (!currentMidi) return;
     let track = currentMidi.tracks[trackIndex];
-
     let snappedNotes = track.notes.map(n => {
-        let pc = n.midi % 12;
         const ptow = [0, 0, 2, 2, 4, 5, 5, 7, 7, 9, 9, 11];
-        let oct = Math.floor(n.midi / 12) - 1;
-        return (oct + 1) * 12 + ptow[pc];
+        return (Math.floor(n.midi / 12)) * 12 + ptow[n.midi % 12];
     });
 
-    let maxScore = -1;
-    let bestWindow = [];
-
+    let maxScore = -1; let bestWindow = [];
     for (let i = 0; i <= allWhiteKeys.length - 15; i++) {
         let currentWindow = allWhiteKeys.slice(i, i + 15);
-        let minW = currentWindow[0];
-        let maxW = currentWindow[14];
-        let score = 0;
-        for (let sn of snappedNotes) {
-            if (sn >= minW && sn <= maxW) score++;
-        }
-        if (score > maxScore) {
-            maxScore = score;
-            bestWindow = currentWindow;
-        }
+        let score = snappedNotes.filter(sn => sn >= currentWindow[0] && sn <= currentWindow[14]).length;
+        if (score > maxScore) { maxScore = score; bestWindow = currentWindow; }
     }
+    allowedNotes = bestWindow; initLUT(); 
 
-    allowedNotes = bestWindow;
-    initLUT(); 
-
-    let minNoteName = Tone.Frequency(allowedNotes[0], "midi").toNote();
-    let maxNoteName = Tone.Frequency(allowedNotes[14], "midi").toNote();
-    document.getElementById('detected-range').innerText = `🎯 自動鎖定主旋律最佳音域：${minNoteName} ~ ${maxNoteName}`;
-
-    const PPQ = currentMidi.header.ppq; 
-    const stepTicks = PPQ / 2; 
-    let maxTick = Math.max(...track.notes.map(n => n.ticks));
-    let totalSteps = Math.ceil(maxTick / stepTicks) + 1;
+    const stepTicks = currentMidi.header.ppq / 2; 
+    let totalSteps = Math.ceil(Math.max(...track.notes.map(n => n.ticks)) / stepTicks) + 1;
     let rawGrid = new Array(totalSteps).fill(null).map(() => []); 
 
     track.notes.forEach(note => {
         let stepIndex = Math.round(note.ticks / stepTicks);
         let safeNote = smartMapNote(note.midi); 
-        if (!rawGrid[stepIndex].includes(safeNote)) {
-            rawGrid[stepIndex].push(safeNote);
-        }
+        if (!rawGrid[stepIndex].includes(safeNote)) rawGrid[stepIndex].push(safeNote);
     });
 
-    paperTapeData = []; 
-    for (let i = 0; i < rawGrid.length; i++) {
-        let notesInGrid = rawGrid[i];
-        if (notesInGrid.length === 0) {
-            paperTapeData.push(0); 
-        } else {
-            notesInGrid.sort((a, b) => b - a); 
-            let topTwoNotes = notesInGrid.slice(0, 2);
-            let stateID = getLookupIndex(topTwoNotes);
-            paperTapeData.push(stateID);
-        }
-    }
-
-    document.getElementById('status').innerText = `✅ 音軌 [${trackIndex}] 解析完成！共產生 ${paperTapeData.length} 個物理網格。`;
+    paperTapeData = rawGrid.map(notes => notes.length === 0 ? 0 : getLookupIndex(notes.slice(0, 2).map(n => smartMapNote(n))));
     
-    // 初始化進度條數值
     document.getElementById('playback-progress').max = paperTapeData.length;
-    document.getElementById('progress-text').innerText = `0 / ${paperTapeData.length}`;
-    
+    document.getElementById('status').innerText = `✅ 解析完成！共 ${paperTapeData.length} 個物理網格。`;
     drawCanvas(paperTapeData);
-    document.getElementById('play-btn').disabled = false;
-    document.getElementById('pdf-btn').disabled = false;
+    document.getElementById('play-btn').disabled = false; document.getElementById('pdf-btn').disabled = false;
 }
 
 document.getElementById('spacing-x-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
 document.getElementById('spacing-y-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
+document.getElementById('steps-per-row').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
 
-// 🌟 升級：繪圖引擎新增 currentStep 參數，用來畫紅色掃描線
+// 🌟 修正 3：多行渲染引擎 (Canvas 折行防護)
 function drawCanvas(data, currentStep = -1) {
     const canvas = document.getElementById('tapeCanvas');
     const ctx = canvas.getContext('2d');
-    const spacingX_mm = parseFloat(document.getElementById('spacing-x-mm').value) || 5;
-    const spacingY_mm = parseFloat(document.getElementById('spacing-y-mm').value) || 10;
-    const dotSpacingX = spacingX_mm * MM_TO_PX; 
-    const trackSpacingY = spacingY_mm * MM_TO_PX; 
-    const rectWidth = (spacingX_mm * 0.7) * MM_TO_PX; 
+    
+    const spacingX_px = (parseFloat(document.getElementById('spacing-x-mm').value) || 5) * MM_TO_PX;
+    const spacingY_px = (parseFloat(document.getElementById('spacing-y-mm').value) || 10) * MM_TO_PX;
+    const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 150;
+    const rectWidth = spacingX_px * 0.7; 
     const rectHeight = 3 * MM_TO_PX; 
     const margin = 15 * MM_TO_PX;
+    
+    // 計算總共需要幾行
+    const totalRows = Math.ceil(data.length / stepsPerRow);
+    const rowHeight = (7 * spacingY_px) + (margin * 2); 
 
-    canvas.width = (data.length * dotSpacingX) + (margin * 2);
-    canvas.height = (7 * trackSpacingY) + (margin * 2);
+    // 安全的寬高計算
+    canvas.width = (Math.min(data.length, stepsPerRow) * spacingX_px) + (margin * 2);
+    canvas.height = totalRows * rowHeight;
     
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = "#e0e0e0";
-    for (let i = 0; i < 8; i++) {
-        ctx.beginPath();
-        ctx.moveTo(0, i * trackSpacingY + margin);
-        ctx.lineTo(canvas.width, i * trackSpacingY + margin);
-        ctx.stroke();
-    }
+    for (let row = 0; row < totalRows; row++) {
+        let startY = row * rowHeight;
+        
+        ctx.lineWidth = 1; ctx.strokeStyle = "#e0e0e0";
+        for (let i = 0; i < 8; i++) {
+            ctx.beginPath();
+            ctx.moveTo(margin, startY + (i * spacingY_px) + margin);
+            ctx.lineTo(canvas.width - margin, startY + (i * spacingY_px) + margin);
+            ctx.stroke();
+        }
 
-    ctx.fillStyle = "#000000";
-    data.forEach((stateID, stepIndex) => {
-        let x = (stepIndex * dotSpacingX) + margin;
-        ctx.fillRect(x - rectWidth/2, 7 * trackSpacingY + margin - rectHeight/2, rectWidth, rectHeight);
-        let binaryStr = stateID.toString(2).padStart(7, '0');
-        for (let bit = 0; bit < 7; bit++) {
-            if (binaryStr[bit] === '1') {
-                let y = bit * trackSpacingY + margin;
-                ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
+        let startIdx = row * stepsPerRow;
+        let endIdx = Math.min(startIdx + stepsPerRow, data.length);
+        
+        ctx.fillStyle = "#000000";
+        for (let i = startIdx; i < endIdx; i++) {
+            let stateID = data[i];
+            let x = ((i - startIdx) * spacingX_px) + margin;
+            
+            // Clock 軌
+            ctx.fillRect(x - rectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, rectWidth, rectHeight);
+            
+            // Data 軌
+            let binaryStr = stateID.toString(2).padStart(7, '0');
+            for (let bit = 0; bit < 7; bit++) {
+                if (binaryStr[bit] === '1') {
+                    let y = startY + (bit * spacingY_px) + margin;
+                    ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
+                }
+            }
+
+            // 紅色掃描線
+            if (i === currentStep) {
+                ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
+                ctx.fillRect(x - spacingX_px/2, startY, spacingX_px, rowHeight);
+                ctx.strokeStyle = "#ff0000"; ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(x, startY); ctx.lineTo(x, startY + rowHeight); ctx.stroke();
+                ctx.fillStyle = "#000000"; // 恢復黑色
             }
         }
-    });
-
-    // 🌟 繪製紅色虛擬讀取頭 (Playhead)
-    if (currentStep >= 0) {
-        let playheadX = (currentStep * dotSpacingX) + margin;
-        
-        // 畫半透明的紅色區塊覆蓋當下這一拍
-        ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
-        ctx.fillRect(playheadX - dotSpacingX/2, 0, dotSpacingX, canvas.height);
-        
-        // 畫一條銳利的紅色雷射線
-        ctx.strokeStyle = "#ff0000";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(playheadX, 0);
-        ctx.lineTo(playheadX, canvas.height);
-        ctx.stroke();
     }
 }
 
+// 🌟 修正 3.1：多頁 PDF 輸出 (A4 安全列印)
 document.getElementById('pdf-btn').addEventListener('click', () => {
     const { jsPDF } = window.jspdf;
-    const canvas = document.getElementById('tapeCanvas');
-    // 為了 PDF 匯出乾淨的畫面，匯出前強制清除紅色掃描線
     drawCanvas(paperTapeData, -1);
     
+    // A4 橫向尺寸 (297 x 210 mm)
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const canvas = document.getElementById('tapeCanvas');
     const pdfWidth = canvas.width / MM_TO_PX;
     const pdfHeight = canvas.height / MM_TO_PX;
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [pdfWidth, pdfHeight] });
-    const imgData = canvas.toDataURL('image/png', 1.0);
-    doc.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-    doc.save('MusicBox_Physical_Tape.pdf');
+    
+    // 如果畫布高於 A4 (210mm)，則強制啟用分頁
+    const a4Height = 200; // 預留邊距
+    let currentY = 0;
+    let pageNum = 1;
+
+    while (currentY < pdfHeight) {
+        if (pageNum > 1) doc.addPage();
+        // 利用裁切技術，將超長畫布分段印在多張 A4 上
+        doc.addImage(canvas.toDataURL('image/png', 1.0), 'PNG', 0, -currentY, pdfWidth, pdfHeight);
+        currentY += a4Height;
+        pageNum++;
+    }
+    doc.save('MusicBox_A4_Pages.pdf');
 });
 
-// 🌟 升級：播放引擎與 UI 進度條/卷軸連動
 async function playVirtualPaperTape() {
     if (isPlaying) return;
+    
+    // 🌟 修正 2：確保 Context 啟動後才實例化 Synth
     await Tone.start(); 
+    if (!synth) {
+        synth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sine" }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1 } }).toDestination();
+    }
+    
     isPlaying = true;
-    
-    document.getElementById('play-btn').disabled = true;
-    document.getElementById('stop-btn').disabled = false;
-    
-    const progressArea = document.getElementById('progress-area');
-    const progressBar = document.getElementById('playback-progress');
-    const progressText = document.getElementById('progress-text');
-    const canvasContainer = document.getElementById('canvas-container');
-    
-    progressArea.style.display = 'flex'; // 顯示進度條
+    document.getElementById('play-btn').disabled = true; document.getElementById('stop-btn').disabled = false;
+    document.getElementById('progress-area').style.display = 'flex';
 
     for (let i = 0; i < paperTapeData.length; i++) {
         if (!isPlaying) break; 
         
-        // 發聲邏輯
         let notesToPlay = lut[paperTapeData[i]]; 
         if (notesToPlay && notesToPlay.length > 0) {
             let freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
             synth.triggerAttackRelease(freqStrings, "8n");
         }
 
-        // 🌟 更新 UI 進度文字與進度條
-        progressBar.value = i + 1;
-        progressText.innerText = `${i + 1} / ${paperTapeData.length}`;
-
-        // 🌟 更新畫布，畫出紅色的讀取頭
+        document.getElementById('playback-progress').value = i + 1;
+        document.getElementById('progress-text').innerText = `${i + 1} / ${paperTapeData.length}`;
         drawCanvas(paperTapeData, i);
 
-        // 🌟 自動向右捲動視角 (Auto-scroll)
-        const spacingX_mm = parseFloat(document.getElementById('spacing-x-mm').value) || 5;
-        const currentX_px = (i * spacingX_mm * MM_TO_PX) + (15 * MM_TO_PX); // 當下讀取頭的絕對 X 座標
+        // 🌟 修正 1：正確的 BPM 轉毫秒邏輯
+        let bpm = parseInt(document.getElementById('speed-slider').value) || 120;
+        let stepDelayMs = (60000 / bpm) / 2; // 假設每步為半拍 (1/8 note)
         
-        // 如果讀取頭快要跑出容器的右邊緣，就把卷軸往右推
-        if (currentX_px > canvasContainer.scrollLeft + canvasContainer.clientWidth - 150) {
-            canvasContainer.scrollLeft = currentX_px - 150;
-        } else if (currentX_px < canvasContainer.scrollLeft) {
-            // 如果你手動把卷軸往回拉，程式會自動把它拉回播放位置
-            canvasContainer.scrollLeft = currentX_px - 50;
-        }
-
-        await new Promise(r => setTimeout(r, document.getElementById('speed-slider').value));
+        await new Promise(r => setTimeout(r, stepDelayMs));
     }
     
-    // 播放結束後的狀態還原
     isPlaying = false;
-    document.getElementById('play-btn').disabled = false;
-    document.getElementById('stop-btn').disabled = true;
-    drawCanvas(paperTapeData, -1); // 播放完畢，清除紅色掃描線
+    document.getElementById('play-btn').disabled = false; document.getElementById('stop-btn').disabled = true;
+    drawCanvas(paperTapeData, -1); 
 }
 
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
-document.getElementById('stop-btn').addEventListener('click', () => { 
-    isPlaying = false; 
-    drawCanvas(paperTapeData, -1); // 按下停止時，清除紅色掃描線
-});
+document.getElementById('stop-btn').addEventListener('click', () => { isPlaying = false; drawCanvas(paperTapeData, -1); });
 </script>
 </body>
 </html>
