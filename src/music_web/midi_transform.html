@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>8-Bit 電子音樂盒樂譜編譯器 (核心修復與分頁列印版)</title>
+    <title>8-Bit 電子音樂盒樂譜編譯器 (全端機電控制版)</title>
     <script src="https://unpkg.com/@tonejs/midi"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -16,24 +16,28 @@
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         #stop-btn { background-color: #dc3545; }
         #pdf-btn { background-color: #007bff; }
+        #wifi-btn { background-color: #17a2b8; }
+        #wifi-btn:hover:not(:disabled) { background-color: #138496; }
         #status { font-weight: bold; color: #0056b3; margin-top: 10px; }
         .progress-area { background: #fff3cd; border-left: 5px solid #ffc107; width: 100%; box-sizing: border-box; display: none; flex-direction: column; align-items: flex-start; gap: 5px;}
         progress { width: 100%; height: 20px; }
         #canvas-container { overflow-x: auto; border: 1px solid #ccc; margin-top: 20px; background-color: #fff; scroll-behavior: smooth; max-height: 500px; overflow-y: auto;}
         canvas { display: block; }
         .input-group { display: flex; flex-direction: column; gap: 5px; font-weight: bold; color: #444; }
-        input[type="number"], select { padding: 5px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+        input[type="number"], input[type="text"], select { padding: 5px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>🎛️ 8-Bit 紙帶樂譜編譯器</h1>
-    <div class="subtitle">時序校正、音效安全加固、分段渲染防崩潰機制</div>
+    <h1>🎛️ 8-Bit 紙帶樂譜編譯控制台</h1>
+    <div class="subtitle">支援列印加工防呆標記與 ESP32 Wi-Fi 無線通訊傳輸</div>
     
     <div class="controls" style="background-color: #e2efff; border-left: 5px solid #007bff;">
         <input type="file" id="midi-upload" accept=".mid,.midi">
-        <select id="track-select" disabled><option>等待上傳 MIDI...</option></select>
+        <div class="input-group" style="flex-grow: 1;">
+            <select id="track-select" disabled><option>等待上傳 MIDI...</option></select>
+        </div>
     </div>
 
     <div id="status">系統就緒，等待檔案上傳...</div>
@@ -49,10 +53,18 @@
         <progress id="playback-progress" value="0" max="100"></progress>
     </div>
 
+    <div class="export-controls" style="background-color: #e8f5e9; border-left: 5px solid #28a745;">
+        <div class="input-group">
+            <label>📡 ESP32 IP 位址</label>
+            <input type="text" id="esp-ip" value="192.168.4.1" placeholder="192.168.x.x" style="width: 150px;">
+        </div>
+        <button id="wifi-btn" disabled>📶 無線傳送至 ESP32</button>
+    </div>
+
     <div class="export-controls">
         <div class="input-group"><label>X孔距 (mm)</label><input type="number" id="spacing-x-mm" min="2" max="20" step="0.5" value="5"></div>
         <div class="input-group"><label>Y軌距 (mm)</label><input type="number" id="spacing-y-mm" min="2" max="20" step="0.5" value="10"></div>
-        <div class="input-group"><label>每行最大網格數</label><input type="number" id="steps-per-row" min="50" max="500" step="10" value="150"></div>
+        <div class="input-group"><label>每行最大網格數</label><input type="number" id="steps-per-row" min="50" max="500" step="10" value="120"></div>
         <button id="pdf-btn" disabled>📄 匯出 A4 分頁紙帶 (PDF)</button>
     </div>
 
@@ -67,8 +79,6 @@ let allowedNotes = [];
 let lut = []; 
 let paperTapeData = []; 
 const MM_TO_PX = 3.779528;
-
-// 🌟 修正 2：延遲實例化 Tone.js，宣告為 null
 let synth = null;
 let isPlaying = false;
 
@@ -107,7 +117,10 @@ function smartMapNote(midiNote) {
 document.getElementById('midi-upload').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    document.getElementById('play-btn').disabled = true; document.getElementById('pdf-btn').disabled = true; isPlaying = false;
+    document.getElementById('play-btn').disabled = true; 
+    document.getElementById('pdf-btn').disabled = true; 
+    document.getElementById('wifi-btn').disabled = true;
+    isPlaying = false;
     
     const reader = new FileReader();
     reader.onload = async function(e) {
@@ -163,31 +176,32 @@ function processMidiTrack(trackIndex) {
     document.getElementById('playback-progress').max = paperTapeData.length;
     document.getElementById('status').innerText = `✅ 解析完成！共 ${paperTapeData.length} 個物理網格。`;
     drawCanvas(paperTapeData);
-    document.getElementById('play-btn').disabled = false; document.getElementById('pdf-btn').disabled = false;
+    
+    document.getElementById('play-btn').disabled = false; 
+    document.getElementById('pdf-btn').disabled = false;
+    document.getElementById('wifi-btn').disabled = false;
 }
 
 document.getElementById('spacing-x-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
 document.getElementById('spacing-y-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
 document.getElementById('steps-per-row').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
 
-// 🌟 修正 3：多行渲染引擎 (Canvas 折行防護)
+// --- 繪圖引擎 (防呆標籤與裁切線) ---
 function drawCanvas(data, currentStep = -1) {
     const canvas = document.getElementById('tapeCanvas');
     const ctx = canvas.getContext('2d');
     
     const spacingX_px = (parseFloat(document.getElementById('spacing-x-mm').value) || 5) * MM_TO_PX;
     const spacingY_px = (parseFloat(document.getElementById('spacing-y-mm').value) || 10) * MM_TO_PX;
-    const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 150;
+    const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 120;
     const rectWidth = spacingX_px * 0.7; 
     const rectHeight = 3 * MM_TO_PX; 
-    const margin = 15 * MM_TO_PX;
+    const margin = 20 * MM_TO_PX; 
     
-    // 計算總共需要幾行
     const totalRows = Math.ceil(data.length / stepsPerRow);
-    const rowHeight = (7 * spacingY_px) + (margin * 2); 
+    const rowHeight = (7 * spacingY_px) + (margin * 2.5); 
 
-    // 安全的寬高計算
-    canvas.width = (Math.min(data.length, stepsPerRow) * spacingX_px) + (margin * 2);
+    canvas.width = (Math.min(data.length, stepsPerRow) * spacingX_px) + (margin * 2.5);
     canvas.height = totalRows * rowHeight;
     
     ctx.fillStyle = "#ffffff";
@@ -195,13 +209,38 @@ function drawCanvas(data, currentStep = -1) {
 
     for (let row = 0; row < totalRows; row++) {
         let startY = row * rowHeight;
+        let actualStepsInThisRow = Math.min(stepsPerRow, data.length - (row * stepsPerRow));
+        let rowWidth = (actualStepsInThisRow * spacingX_px);
         
-        ctx.lineWidth = 1; ctx.strokeStyle = "#e0e0e0";
+        ctx.setLineDash([5, 5]); 
+        ctx.strokeStyle = "#aaaaaa";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(margin/2, startY + margin/2, rowWidth + margin*1.5, (7 * spacingY_px) + margin);
+        ctx.setLineDash([]); 
+        
+        ctx.font = "14px Arial";
+        ctx.fillStyle = "#888888";
+        ctx.fillText("✂️ 沿虛線裁切", margin/2 + 5, startY + margin/2 - 5);
+
+        ctx.lineWidth = 1; 
+        ctx.strokeStyle = "#e0e0e0";
+        ctx.font = "bold 12px Arial";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+
         for (let i = 0; i < 8; i++) {
-            ctx.beginPath();
-            ctx.moveTo(margin, startY + (i * spacingY_px) + margin);
-            ctx.lineTo(canvas.width - margin, startY + (i * spacingY_px) + margin);
-            ctx.stroke();
+            let lineY = startY + (i * spacingY_px) + margin;
+            ctx.beginPath(); ctx.moveTo(margin, lineY); ctx.lineTo(margin + rowWidth, lineY); ctx.stroke();
+            ctx.fillStyle = (i === 7) ? "#d63384" : "#444444"; 
+            ctx.fillText((i === 7) ? "CLK" : `D${i+1}`, margin - 10, lineY);
+        }
+
+        ctx.fillStyle = "#007bff";
+        ctx.textAlign = "left";
+        if (row > 0) ctx.fillText(`◄ 黏接 第 ${row} 段`, margin, startY + margin/2 + 15);
+        if (row < totalRows - 1) {
+            ctx.textAlign = "right";
+            ctx.fillText(`黏接 第 ${row + 2} 段 ►`, margin + rowWidth, startY + margin/2 + 15);
         }
 
         let startIdx = row * stepsPerRow;
@@ -212,10 +251,8 @@ function drawCanvas(data, currentStep = -1) {
             let stateID = data[i];
             let x = ((i - startIdx) * spacingX_px) + margin;
             
-            // Clock 軌
             ctx.fillRect(x - rectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, rectWidth, rectHeight);
             
-            // Data 軌
             let binaryStr = stateID.toString(2).padStart(7, '0');
             for (let bit = 0; bit < 7; bit++) {
                 if (binaryStr[bit] === '1') {
@@ -224,52 +261,45 @@ function drawCanvas(data, currentStep = -1) {
                 }
             }
 
-            // 紅色掃描線
             if (i === currentStep) {
                 ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
                 ctx.fillRect(x - spacingX_px/2, startY, spacingX_px, rowHeight);
                 ctx.strokeStyle = "#ff0000"; ctx.lineWidth = 2;
-                ctx.beginPath(); ctx.moveTo(x, startY); ctx.lineTo(x, startY + rowHeight); ctx.stroke();
-                ctx.fillStyle = "#000000"; // 恢復黑色
+                ctx.beginPath(); ctx.moveTo(x, startY + margin/2); ctx.lineTo(x, startY + margin/2 + (7 * spacingY_px) + margin); ctx.stroke();
+                ctx.fillStyle = "#000000"; 
             }
         }
     }
 }
 
-// 🌟 修正 3.1：多頁 PDF 輸出 (A4 安全列印)
+// --- 匯出 PDF 引擎 ---
 document.getElementById('pdf-btn').addEventListener('click', () => {
     const { jsPDF } = window.jspdf;
     drawCanvas(paperTapeData, -1);
     
-    // A4 橫向尺寸 (297 x 210 mm)
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const canvas = document.getElementById('tapeCanvas');
     const pdfWidth = canvas.width / MM_TO_PX;
     const pdfHeight = canvas.height / MM_TO_PX;
     
-    // 如果畫布高於 A4 (210mm)，則強制啟用分頁
-    const a4Height = 200; // 預留邊距
+    const a4Height = 200; 
     let currentY = 0;
     let pageNum = 1;
 
     while (currentY < pdfHeight) {
         if (pageNum > 1) doc.addPage();
-        // 利用裁切技術，將超長畫布分段印在多張 A4 上
         doc.addImage(canvas.toDataURL('image/png', 1.0), 'PNG', 0, -currentY, pdfWidth, pdfHeight);
         currentY += a4Height;
         pageNum++;
     }
-    doc.save('MusicBox_A4_Pages.pdf');
+    doc.save('MusicBox_Physical_Tape_Final.pdf');
 });
 
+// --- 虛擬播放引擎 ---
 async function playVirtualPaperTape() {
     if (isPlaying) return;
-    
-    // 🌟 修正 2：確保 Context 啟動後才實例化 Synth
     await Tone.start(); 
-    if (!synth) {
-        synth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sine" }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1 } }).toDestination();
-    }
+    if (!synth) synth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sine" }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1 } }).toDestination();
     
     isPlaying = true;
     document.getElementById('play-btn').disabled = true; document.getElementById('stop-btn').disabled = false;
@@ -288,10 +318,8 @@ async function playVirtualPaperTape() {
         document.getElementById('progress-text').innerText = `${i + 1} / ${paperTapeData.length}`;
         drawCanvas(paperTapeData, i);
 
-        // 🌟 修正 1：正確的 BPM 轉毫秒邏輯
         let bpm = parseInt(document.getElementById('speed-slider').value) || 120;
-        let stepDelayMs = (60000 / bpm) / 2; // 假設每步為半拍 (1/8 note)
-        
+        let stepDelayMs = (60000 / bpm) / 2; 
         await new Promise(r => setTimeout(r, stepDelayMs));
     }
     
@@ -302,6 +330,31 @@ async function playVirtualPaperTape() {
 
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
 document.getElementById('stop-btn').addEventListener('click', () => { isPlaying = false; drawCanvas(paperTapeData, -1); });
+
+// --- 🌟 IoT Wi-Fi 傳輸引擎 ---
+document.getElementById('wifi-btn').addEventListener('click', async () => {
+    const ip = document.getElementById('esp-ip').value.trim();
+    if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
+
+    const btn = document.getElementById('wifi-btn');
+    btn.innerText = "⏳ 傳送中..."; btn.disabled = true;
+
+    try {
+        const payload = { song_length: paperTapeData.length, score: paperTapeData };
+        const response = await fetch(`http://${ip}/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' }, 
+            body: JSON.stringify(payload)
+        });
+
+        if (response.ok) alert('✅ 樂譜傳送成功！ESP32 已接收並準備播放！');
+        else alert('❌ ESP32 回應錯誤，狀態碼: ' + response.status);
+    } catch (err) {
+        alert('❌ 無法連線至 ESP32！\n請確認你的筆電是否與 ESP32 在同一個 Wi-Fi 網路下。\n錯誤細節: ' + err.message);
+    } finally {
+        btn.innerText = "📶 無線傳送至 ESP32"; btn.disabled = false;
+    }
+});
 </script>
 </body>
 </html>
