@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>8-Bit 電子音樂盒樂譜編譯器 (全端機電控制版)</title>
+    <title>8-Bit 電子音樂盒樂譜編譯器 (復古音色切換版)</title>
     <script src="https://unpkg.com/@tonejs/midi"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -31,7 +31,7 @@
 
 <div class="container">
     <h1>🎛️ 8-Bit 紙帶樂譜編譯控制台</h1>
-    <div class="subtitle">支援列印加工防呆標記與 ESP32 Wi-Fi 無線通訊傳輸</div>
+    <div class="subtitle">內建多軌分離、波形合成器與 IoT 無線通訊引擎</div>
     
     <div class="controls" style="background-color: #e2efff; border-left: 5px solid #007bff;">
         <input type="file" id="midi-upload" accept=".mid,.midi">
@@ -43,9 +43,20 @@
     <div id="status">系統就緒，等待檔案上傳...</div>
     
     <div class="controls">
-        <button id="play-btn" disabled>▶️ 預覽實體聲音</button>
+        <button id="play-btn" disabled>▶️ 預覽聲音</button>
         <button id="stop-btn" disabled>⏹️ 停止</button>
-        <label>⚙️ 播放速度 (BPM): <input type="range" id="speed-slider" min="60" max="300" value="120"> <span id="bpm-val">120</span></label>
+        
+        <div class="input-group">
+            <label>🎹 音色波形</label>
+            <select id="waveform-select">
+                <option value="sine">水晶音樂 (Sine)</option>
+                <option value="square" selected>紅白機 8-Bit (Square)</option>
+                <option value="triangle">復古貝斯 (Triangle)</option>
+                <option value="sawtooth">電子管樂 (Sawtooth)</option>
+            </select>
+        </div>
+
+        <label style="margin-left: auto;">⚙️ 轉速 (BPM): <input type="range" id="speed-slider" min="60" max="300" value="120"> <span id="bpm-val">120</span></label>
     </div>
 
     <div class="progress-area" id="progress-area">
@@ -64,8 +75,8 @@
     <div class="export-controls">
         <div class="input-group"><label>X孔距 (mm)</label><input type="number" id="spacing-x-mm" min="2" max="20" step="0.5" value="5"></div>
         <div class="input-group"><label>Y軌距 (mm)</label><input type="number" id="spacing-y-mm" min="2" max="20" step="0.5" value="10"></div>
-        <div class="input-group"><label>每行最大網格數</label><input type="number" id="steps-per-row" min="50" max="500" step="10" value="120"></div>
-        <button id="pdf-btn" disabled>📄 匯出 A4 分頁紙帶 (PDF)</button>
+        <div class="input-group"><label>每行網格數</label><input type="number" id="steps-per-row" min="50" max="500" step="10" value="120"></div>
+        <button id="pdf-btn" disabled>📄 匯出 A4 分頁紙帶</button>
     </div>
 
     <div id="canvas-container">
@@ -146,6 +157,13 @@ document.getElementById('midi-upload').addEventListener('change', async (e) => {
 document.getElementById('track-select').addEventListener('change', (e) => processMidiTrack(parseInt(e.target.value)));
 document.getElementById('speed-slider').addEventListener('input', (e) => document.getElementById('bpm-val').innerText = e.target.value);
 
+// 🌟 新增：監聽音色下拉選單，動態更新合成器波形
+document.getElementById('waveform-select').addEventListener('change', (e) => {
+    if (synth) {
+        synth.set({ oscillator: { type: e.target.value } });
+    }
+});
+
 function processMidiTrack(trackIndex) {
     let track = currentMidi.tracks[trackIndex];
     let snappedNotes = track.notes.map(n => {
@@ -186,7 +204,6 @@ document.getElementById('spacing-x-mm').addEventListener('input', () => { if (pa
 document.getElementById('spacing-y-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
 document.getElementById('steps-per-row').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
 
-// --- 繪圖引擎 (防呆標籤與裁切線) ---
 function drawCanvas(data, currentStep = -1) {
     const canvas = document.getElementById('tapeCanvas');
     const ctx = canvas.getContext('2d');
@@ -272,7 +289,6 @@ function drawCanvas(data, currentStep = -1) {
     }
 }
 
-// --- 匯出 PDF 引擎 ---
 document.getElementById('pdf-btn').addEventListener('click', () => {
     const { jsPDF } = window.jspdf;
     drawCanvas(paperTapeData, -1);
@@ -295,11 +311,18 @@ document.getElementById('pdf-btn').addEventListener('click', () => {
     doc.save('MusicBox_Physical_Tape_Final.pdf');
 });
 
-// --- 虛擬播放引擎 ---
 async function playVirtualPaperTape() {
     if (isPlaying) return;
     await Tone.start(); 
-    if (!synth) synth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sine" }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1 } }).toDestination();
+    
+    // 🌟 在建立合成器時，抓取當前選定的波形
+    if (!synth) {
+        let selectedWaveform = document.getElementById('waveform-select').value;
+        synth = new Tone.PolySynth(Tone.Synth, { 
+            oscillator: { type: selectedWaveform }, 
+            envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1 } 
+        }).toDestination();
+    }
     
     isPlaying = true;
     document.getElementById('play-btn').disabled = true; document.getElementById('stop-btn').disabled = false;
@@ -331,7 +354,6 @@ async function playVirtualPaperTape() {
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
 document.getElementById('stop-btn').addEventListener('click', () => { isPlaying = false; drawCanvas(paperTapeData, -1); });
 
-// --- 🌟 IoT Wi-Fi 傳輸引擎 ---
 document.getElementById('wifi-btn').addEventListener('click', async () => {
     const ip = document.getElementById('esp-ip').value.trim();
     if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
