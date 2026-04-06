@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>8-Bit 電子音樂盒樂譜編譯器 (復古音色切換版)</title>
+    <title>8-Bit 電子音樂盒樂譜編譯器 (全端機電控制版 V6.1)</title>
     <script src="https://unpkg.com/@tonejs/midi"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -31,7 +31,7 @@
 
 <div class="container">
     <h1>🎛️ 8-Bit 紙帶樂譜編譯控制台</h1>
-    <div class="subtitle">內建多軌分離、波形合成器與 IoT 無線通訊引擎</div>
+    <div class="subtitle">內建多軌分離、波形合成器與 IoT 無線通訊引擎 (已修復變數錯誤)</div>
     
     <div class="controls" style="background-color: #e2efff; border-left: 5px solid #007bff;">
         <input type="file" id="midi-upload" accept=".mid,.midi">
@@ -157,7 +157,6 @@ document.getElementById('midi-upload').addEventListener('change', async (e) => {
 document.getElementById('track-select').addEventListener('change', (e) => processMidiTrack(parseInt(e.target.value)));
 document.getElementById('speed-slider').addEventListener('input', (e) => document.getElementById('bpm-val').innerText = e.target.value);
 
-// 🌟 新增：監聽音色下拉選單，動態更新合成器波形
 document.getElementById('waveform-select').addEventListener('change', (e) => {
     if (synth) {
         synth.set({ oscillator: { type: e.target.value } });
@@ -315,7 +314,6 @@ async function playVirtualPaperTape() {
     if (isPlaying) return;
     await Tone.start(); 
     
-    // 🌟 在建立合成器時，抓取當前選定的波形
     if (!synth) {
         let selectedWaveform = document.getElementById('waveform-select').value;
         synth = new Tone.PolySynth(Tone.Synth, { 
@@ -354,6 +352,7 @@ async function playVirtualPaperTape() {
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
 document.getElementById('stop-btn').addEventListener('click', () => { isPlaying = false; drawCanvas(paperTapeData, -1); });
 
+// --- 🌟 IoT Wi-Fi 傳輸引擎 (已修復 Scope 錯誤) ---
 document.getElementById('wifi-btn').addEventListener('click', async () => {
     const ip = document.getElementById('esp-ip').value.trim();
     if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
@@ -362,7 +361,16 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
     btn.innerText = "⏳ 傳送中..."; btn.disabled = true;
 
     try {
-        const payload = { song_length: paperTapeData.length, score: paperTapeData };
+        // 🌟 在這裡獨立讀取 BPM 並計算毫秒延遲，避免找不到變數
+        let currentBpm = parseInt(document.getElementById('speed-slider').value) || 120;
+        let calculatedDelayMs = (60000 / currentBpm) / 2;
+
+        const payload = { 
+            song_length: paperTapeData.length, 
+            score: paperTapeData,
+            delay_ms: calculatedDelayMs // 將計算好的速度傳遞給 ESP32
+        };
+        
         const response = await fetch(`http://${ip}/upload`, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' }, 
