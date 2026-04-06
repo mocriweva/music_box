@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>8-Bit 電子音樂盒樂譜編譯器 (全端機電控制版 V6.1)</title>
+    <title>8-Bit 電子音樂盒樂譜編譯器 (全端機電控制版 V6.2)</title>
     <script src="https://unpkg.com/@tonejs/midi"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -19,6 +19,10 @@
         #wifi-btn { background-color: #17a2b8; }
         #wifi-btn:hover:not(:disabled) { background-color: #138496; }
         #status { font-weight: bold; color: #0056b3; margin-top: 10px; }
+        
+        /* 🌟 還原：最佳音域顯示的專屬樣式 */
+        #detected-range { font-weight: bold; color: #d63384; margin-top: 5px; font-size: 1.1em; }
+        
         .progress-area { background: #fff3cd; border-left: 5px solid #ffc107; width: 100%; box-sizing: border-box; display: none; flex-direction: column; align-items: flex-start; gap: 5px;}
         progress { width: 100%; height: 20px; }
         #canvas-container { overflow-x: auto; border: 1px solid #ccc; margin-top: 20px; background-color: #fff; scroll-behavior: smooth; max-height: 500px; overflow-y: auto;}
@@ -31,7 +35,7 @@
 
 <div class="container">
     <h1>🎛️ 8-Bit 紙帶樂譜編譯控制台</h1>
-    <div class="subtitle">內建多軌分離、波形合成器與 IoT 無線通訊引擎 (已修復變數錯誤)</div>
+    <div class="subtitle">內建多軌分離、波形合成器與 IoT 無線通訊引擎 (還原最佳音域顯示)</div>
     
     <div class="controls" style="background-color: #e2efff; border-left: 5px solid #007bff;">
         <input type="file" id="midi-upload" accept=".mid,.midi">
@@ -41,6 +45,7 @@
     </div>
 
     <div id="status">系統就緒，等待檔案上傳...</div>
+    <div id="detected-range"></div>
     
     <div class="controls">
         <button id="play-btn" disabled>▶️ 預覽聲音</button>
@@ -131,6 +136,7 @@ document.getElementById('midi-upload').addEventListener('change', async (e) => {
     document.getElementById('play-btn').disabled = true; 
     document.getElementById('pdf-btn').disabled = true; 
     document.getElementById('wifi-btn').disabled = true;
+    document.getElementById('detected-range').innerText = ""; // 上傳新檔案時清空
     isPlaying = false;
     
     const reader = new FileReader();
@@ -177,6 +183,11 @@ function processMidiTrack(trackIndex) {
         if (score > maxScore) { maxScore = score; bestWindow = currentWindow; }
     }
     allowedNotes = bestWindow; initLUT(); 
+
+    // 🌟 還原：透過 Tone.js 將 MIDI 數字轉回人類可讀的音名
+    let minNoteName = Tone.Frequency(allowedNotes[0], "midi").toNote();
+    let maxNoteName = Tone.Frequency(allowedNotes[14], "midi").toNote();
+    document.getElementById('detected-range').innerText = `🎯 自動鎖定主旋律最佳音域：${minNoteName} ~ ${maxNoteName}`;
 
     const stepTicks = currentMidi.header.ppq / 2; 
     let totalSteps = Math.ceil(Math.max(...track.notes.map(n => n.ticks)) / stepTicks) + 1;
@@ -352,7 +363,6 @@ async function playVirtualPaperTape() {
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
 document.getElementById('stop-btn').addEventListener('click', () => { isPlaying = false; drawCanvas(paperTapeData, -1); });
 
-// --- 🌟 IoT Wi-Fi 傳輸引擎 (已修復 Scope 錯誤) ---
 document.getElementById('wifi-btn').addEventListener('click', async () => {
     const ip = document.getElementById('esp-ip').value.trim();
     if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
@@ -361,14 +371,13 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
     btn.innerText = "⏳ 傳送中..."; btn.disabled = true;
 
     try {
-        // 🌟 在這裡獨立讀取 BPM 並計算毫秒延遲，避免找不到變數
         let currentBpm = parseInt(document.getElementById('speed-slider').value) || 120;
         let calculatedDelayMs = (60000 / currentBpm) / 2;
 
         const payload = { 
             song_length: paperTapeData.length, 
             score: paperTapeData,
-            delay_ms: calculatedDelayMs // 將計算好的速度傳遞給 ESP32
+            delay_ms: calculatedDelayMs 
         };
         
         const response = await fetch(`http://${ip}/upload`, {
