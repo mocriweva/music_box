@@ -108,7 +108,7 @@ void decodeState(int stateID) {
     if (stateID >= 1 && stateID <= 15) {
         targetFreq1 = defaultFreqs[stateID - 1];
         phase1 = 0;      
-        amp1 = 8000.0;   // 單重撥弦
+        amp1 = 10000.0;   // 單重撥弦
     } 
     else if (stateID >= 16 && stateID <= 120) {
         int index = 16;

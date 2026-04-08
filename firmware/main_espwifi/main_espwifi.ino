@@ -7,49 +7,43 @@
 #include <Stepper.h>
 
 // ==========================================
-// 🌐 區域網路 (Wi-Fi) 設定
+// 🌐 基地台熱點 (AP Mode) 設定
 // ==========================================
-const char* ssid = "YOUR_WIFI_SSID";       // ⚠️ 填入你的 Wi-Fi 名稱
-const char* password = "YOUR_WIFI_PASSWORD"; // ⚠️ 填入你的 Wi-Fi 密碼
+const char* ap_ssid = "MusicBox-ESP32";   // ⚠️ 你可以自己改熱點名稱
+const char* ap_password = "12345678";     // ⚠️ 熱點密碼 (必須至少 8 碼)
 WebServer server(80);
 
 // ==========================================
-// 🔌 硬體腳位定義 (Pin Definitions)
+// 🔌 硬體腳位定義
 // ==========================================
-// 1. I2S 擴大機 (MAX98357A)
 #define I2S_LRC  25  
 #define I2S_BCLK 26  
 #define I2S_DOUT 22  
 
-// 2. 步進馬達 (28BYJ-48) (移除按鈕腳位)
 const int stepsPerRevolution = 2048;
 Stepper myStepper(stepsPerRevolution, 13, 27, 14, 33);
 
-// 3. TCRT5000 感測器陣列 (CD74HC4051 多工器)
 const int pin_S0 = 16, pin_S1 = 17, pin_S2 = 18, pin_S3 = 19;
 const int pin_SIG = 34; 
 
 // ==========================================
 // 🧠 全自動狀態機與參數
 // ==========================================
-// 🌟 拔除按鈕，改為預設啟動實體模式
 bool isWebPlaying = false;      
 bool isPhysicalPlaying = true;  
 
-// 網頁樂譜記憶體
 std::vector<int> currentScore;
 int currentStep = 0;
 unsigned long lastStepTime = 0;
 int stepDelayMs = 250; 
 
-// 感測器邊緣觸發參數
 bool current_sensor_state[7] = {false};
 bool last_sensor_state[7] = {false};
 const int THRESHOLD_H[7] = {1850, 1850, 1850, 1850, 1850, 1850, 1850};
 const int THRESHOLD_L[7] = {1600, 1600, 1600, 1600, 1600, 1600, 1600};
 
 // ==========================================
-// 🎵 物理音訊引擎 (DSP Parameters)
+// 🎵 物理音訊引擎 (DSP)
 // ==========================================
 #define SAMPLE_RATE 44100
 #define NUM_SAMPLES 512
@@ -64,7 +58,6 @@ volatile float targetFreq1 = 0.0, targetFreq2 = 0.0;
 volatile float phase1 = 0.0, phase2 = 0.0;
 volatile float amp1 = 0.0, amp2 = 0.0;
 
-// --- I2S 初始化 ---
 void initI2S() {
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
@@ -87,7 +80,6 @@ void initI2S() {
     i2s_set_clk(I2S_NUM_0, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
 }
 
-// --- 獨立核心 1：物理音訊合成器 ---
 void audioTask(void *pvParameters) {
     int16_t sampleBuffer[NUM_SAMPLES];
     size_t bytesWritten;
@@ -120,7 +112,6 @@ void audioTask(void *pvParameters) {
     }
 }
 
-// --- 解碼引擎：121 狀態查表法 ---
 void decodeState(int stateID) {
     if (stateID == 0) return; 
     
@@ -151,26 +142,24 @@ void decodeState(int stateID) {
 void setup() {
     Serial.begin(115200);
 
-    // 1. 初始化馬達速度
     myStepper.setSpeed(10);
-
-    // 2. 初始化多工器
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT);
     pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
     pinMode(pin_SIG, INPUT);
 
-    // 3. 啟動 I2S
     initI2S();
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);
 
-    // 4. 連線區域網路
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-    Serial.print("\n連線 Wi-Fi 中...");
-    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-    Serial.printf("\n✅ 連線成功！IP: %s\n", WiFi.localIP().toString().c_str());
+    // 🌟 改為 AP 熱點模式
+    Serial.println("\n正在啟動 ESP32 專屬 Wi-Fi 熱點...");
+    WiFi.softAP(ap_ssid, ap_password);
+    IPAddress IP = WiFi.softAPIP();
+    
+    Serial.println("✅ 熱點啟動成功！");
+    Serial.print("📶 Wi-Fi 名稱: "); Serial.println(ap_ssid);
+    Serial.print("🔑 Wi-Fi 密碼: "); Serial.println(ap_password);
+    Serial.print("📡 請將網頁的 ESP32 IP 位址改成: "); Serial.println(IP); // 通常是 192.168.4.1
 
-    // 5. 設定 WebServer 路由
     server.on("/upload", HTTP_OPTIONS, []() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         server.sendHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -194,7 +183,6 @@ void setup() {
         Serial.printf("📡 [網頁] 樂譜載入完畢！強制切換至數位播放模式。\n");
         server.send(200, "text/plain", "樂譜接收成功！");
 
-        // 🌟 強制中斷實體模式，優先播放網路樂譜
         isPhysicalPlaying = false; 
         isWebPlaying = true;
         currentStep = 0;
@@ -206,15 +194,12 @@ void setup() {
 }
 
 // ==========================================
-// 🔄 主迴圈 (全自動狀態切換)
+// 🔄 主迴圈
 // ==========================================
 void loop() {
-    // 1. 維持網路連線
     server.handleClient(); 
 
-    // 2. 網頁數位播放模式 (優先權最高)
     if (isWebPlaying) {
-        // 馬達持續送出脈衝，如果船型開關有開，馬達就會跟著音樂轉動當特效
         myStepper.step(10); 
         
         if (millis() - lastStepTime >= stepDelayMs) {
@@ -223,23 +208,18 @@ void loop() {
                 decodeState(currentScore[currentStep]);
                 currentStep++;
             } else {
-                // 🌟 播完自動切回實體模式
                 isWebPlaying = false;
                 isPhysicalPlaying = true;
                 Serial.println("⏹️ [網頁] 播放結束，自動回歸【實體感測模式】。");
             }
         }
     }
-
-    // 3. 實體紙帶讀取模式 (預設模式)
     else if (isPhysicalPlaying) {
-        // ESP32 一直在送脈衝，只要你打開船型開關通電，馬達就會立刻帶動紙帶
         myStepper.step(10); 
         
         int stateID_from_sensors = 0;
         bool any_rising_edge = false;
 
-        // 高速掃描 7 顆感測器 (D1~D7)
         for (int i = 0; i < 7; i++) {
             digitalWrite(pin_S0, bitRead(i, 0));
             digitalWrite(pin_S1, bitRead(i, 1));
@@ -262,7 +242,6 @@ void loop() {
             last_sensor_state[i] = current_sensor_state[i];
         }
 
-        // 讀到新的黑點，觸發發聲
         if (any_rising_edge && stateID_from_sensors > 0) {
             decodeState(stateID_from_sensors);
         }
