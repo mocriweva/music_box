@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>8-Bit 電子音樂盒樂譜編譯器 (全端機電控制版 V6.1)</title>
+    <title>8-Bit 電子音樂盒樂譜編譯器 (零延遲高精度排程版 V6.3)</title>
     <script src="https://unpkg.com/@tonejs/midi"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -19,6 +19,7 @@
         #wifi-btn { background-color: #17a2b8; }
         #wifi-btn:hover:not(:disabled) { background-color: #138496; }
         #status { font-weight: bold; color: #0056b3; margin-top: 10px; }
+        #detected-range { font-weight: bold; color: #d63384; margin-top: 5px; font-size: 1.1em; }
         .progress-area { background: #fff3cd; border-left: 5px solid #ffc107; width: 100%; box-sizing: border-box; display: none; flex-direction: column; align-items: flex-start; gap: 5px;}
         progress { width: 100%; height: 20px; }
         #canvas-container { overflow-x: auto; border: 1px solid #ccc; margin-top: 20px; background-color: #fff; scroll-behavior: smooth; max-height: 500px; overflow-y: auto;}
@@ -31,7 +32,7 @@
 
 <div class="container">
     <h1>🎛️ 8-Bit 紙帶樂譜編譯控制台</h1>
-    <div class="subtitle">內建多軌分離、波形合成器與 IoT 無線通訊引擎 (已修復變數錯誤)</div>
+    <div class="subtitle">內建硬體時脈高精度排程器 (Web Audio API 精確同步)</div>
     
     <div class="controls" style="background-color: #e2efff; border-left: 5px solid #007bff;">
         <input type="file" id="midi-upload" accept=".mid,.midi">
@@ -41,6 +42,7 @@
     </div>
 
     <div id="status">系統就緒，等待檔案上傳...</div>
+    <div id="detected-range"></div>
     
     <div class="controls">
         <button id="play-btn" disabled>▶️ 預覽聲音</button>
@@ -91,7 +93,13 @@ let lut = [];
 let paperTapeData = []; 
 const MM_TO_PX = 3.779528;
 let synth = null;
+
+// 🌟 排程器與動畫控制變數
 let isPlaying = false;
+let audioStartTime = 0;
+let currentStepDelaySec = 0;
+let animationFrameId = null;
+let lastRenderedStep = -1;
 
 const allWhiteKeys = [
     24, 26, 28, 29, 31, 33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 52, 53, 55, 57, 59, 
@@ -128,10 +136,13 @@ function smartMapNote(midiNote) {
 document.getElementById('midi-upload').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    
+    // 🌟 記憶體防呆：強制停止並清空先前的排程
+    stopPlayback();
     document.getElementById('play-btn').disabled = true; 
     document.getElementById('pdf-btn').disabled = true; 
     document.getElementById('wifi-btn').disabled = true;
-    isPlaying = false;
+    document.getElementById('detected-range').innerText = ""; 
     
     const reader = new FileReader();
     reader.onload = async function(e) {
@@ -154,13 +165,14 @@ document.getElementById('midi-upload').addEventListener('change', async (e) => {
     reader.readAsArrayBuffer(file);
 });
 
-document.getElementById('track-select').addEventListener('change', (e) => processMidiTrack(parseInt(e.target.value)));
+document.getElementById('track-select').addEventListener('change', (e) => {
+    stopPlayback();
+    processMidiTrack(parseInt(e.target.value));
+});
 document.getElementById('speed-slider').addEventListener('input', (e) => document.getElementById('bpm-val').innerText = e.target.value);
 
 document.getElementById('waveform-select').addEventListener('change', (e) => {
-    if (synth) {
-        synth.set({ oscillator: { type: e.target.value } });
-    }
+    if (synth) synth.set({ oscillator: { type: e.target.value } });
 });
 
 function processMidiTrack(trackIndex) {
@@ -178,6 +190,10 @@ function processMidiTrack(trackIndex) {
     }
     allowedNotes = bestWindow; initLUT(); 
 
+    let minNoteName = Tone.Frequency(allowedNotes[0], "midi").toNote();
+    let maxNoteName = Tone.Frequency(allowedNotes[14], "midi").toNote();
+    document.getElementById('detected-range').innerText = `🎯 自動鎖定主旋律最佳音域：${minNoteName} ~ ${maxNoteName}`;
+
     const stepTicks = currentMidi.header.ppq / 2; 
     let totalSteps = Math.ceil(Math.max(...track.notes.map(n => n.ticks)) / stepTicks) + 1;
     let rawGrid = new Array(totalSteps).fill(null).map(() => []); 
@@ -192,16 +208,16 @@ function processMidiTrack(trackIndex) {
     
     document.getElementById('playback-progress').max = paperTapeData.length;
     document.getElementById('status').innerText = `✅ 解析完成！共 ${paperTapeData.length} 個物理網格。`;
-    drawCanvas(paperTapeData);
+    drawCanvas(paperTapeData, -1);
     
     document.getElementById('play-btn').disabled = false; 
     document.getElementById('pdf-btn').disabled = false;
     document.getElementById('wifi-btn').disabled = false;
 }
 
-document.getElementById('spacing-x-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
-document.getElementById('spacing-y-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
-document.getElementById('steps-per-row').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData); });
+document.getElementById('spacing-x-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData, -1); });
+document.getElementById('spacing-y-mm').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData, -1); });
+document.getElementById('steps-per-row').addEventListener('input', () => { if (paperTapeData.length > 0) drawCanvas(paperTapeData, -1); });
 
 function drawCanvas(data, currentStep = -1) {
     const canvas = document.getElementById('tapeCanvas');
@@ -228,21 +244,15 @@ function drawCanvas(data, currentStep = -1) {
         let actualStepsInThisRow = Math.min(stepsPerRow, data.length - (row * stepsPerRow));
         let rowWidth = (actualStepsInThisRow * spacingX_px);
         
-        ctx.setLineDash([5, 5]); 
-        ctx.strokeStyle = "#aaaaaa";
-        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]); ctx.strokeStyle = "#aaaaaa"; ctx.lineWidth = 1;
         ctx.strokeRect(margin/2, startY + margin/2, rowWidth + margin*1.5, (7 * spacingY_px) + margin);
         ctx.setLineDash([]); 
         
-        ctx.font = "14px Arial";
-        ctx.fillStyle = "#888888";
+        ctx.font = "14px Arial"; ctx.fillStyle = "#888888";
         ctx.fillText("✂️ 沿虛線裁切", margin/2 + 5, startY + margin/2 - 5);
 
-        ctx.lineWidth = 1; 
-        ctx.strokeStyle = "#e0e0e0";
-        ctx.font = "bold 12px Arial";
-        ctx.textAlign = "right";
-        ctx.textBaseline = "middle";
+        ctx.lineWidth = 1; ctx.strokeStyle = "#e0e0e0"; ctx.font = "bold 12px Arial";
+        ctx.textAlign = "right"; ctx.textBaseline = "middle";
 
         for (let i = 0; i < 8; i++) {
             let lineY = startY + (i * spacingY_px) + margin;
@@ -251,8 +261,7 @@ function drawCanvas(data, currentStep = -1) {
             ctx.fillText((i === 7) ? "CLK" : `D${i+1}`, margin - 10, lineY);
         }
 
-        ctx.fillStyle = "#007bff";
-        ctx.textAlign = "left";
+        ctx.fillStyle = "#007bff"; ctx.textAlign = "left";
         if (row > 0) ctx.fillText(`◄ 黏接 第 ${row} 段`, margin, startY + margin/2 + 15);
         if (row < totalRows - 1) {
             ctx.textAlign = "right";
@@ -262,11 +271,11 @@ function drawCanvas(data, currentStep = -1) {
         let startIdx = row * stepsPerRow;
         let endIdx = Math.min(startIdx + stepsPerRow, data.length);
         
-        ctx.fillStyle = "#000000";
         for (let i = startIdx; i < endIdx; i++) {
             let stateID = data[i];
             let x = ((i - startIdx) * spacingX_px) + margin;
             
+            ctx.fillStyle = "#000000";
             ctx.fillRect(x - rectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, rectWidth, rectHeight);
             
             let binaryStr = stateID.toString(2).padStart(7, '0');
@@ -277,12 +286,12 @@ function drawCanvas(data, currentStep = -1) {
                 }
             }
 
+            // 🌟 獨立繪製紅色進度標記，不影響底圖記憶體
             if (i === currentStep) {
                 ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
                 ctx.fillRect(x - spacingX_px/2, startY, spacingX_px, rowHeight);
                 ctx.strokeStyle = "#ff0000"; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.moveTo(x, startY + margin/2); ctx.lineTo(x, startY + margin/2 + (7 * spacingY_px) + margin); ctx.stroke();
-                ctx.fillStyle = "#000000"; 
             }
         }
     }
@@ -310,6 +319,7 @@ document.getElementById('pdf-btn').addEventListener('click', () => {
     doc.save('MusicBox_Physical_Tape_Final.pdf');
 });
 
+// 🌟 全新重構：高精度排程器 (Web Audio API Time Scheduling)
 async function playVirtualPaperTape() {
     if (isPlaying) return;
     await Tone.start(); 
@@ -323,36 +333,72 @@ async function playVirtualPaperTape() {
     }
     
     isPlaying = true;
-    document.getElementById('play-btn').disabled = true; document.getElementById('stop-btn').disabled = false;
+    lastRenderedStep = -1;
+    document.getElementById('play-btn').disabled = true; 
+    document.getElementById('stop-btn').disabled = false;
     document.getElementById('progress-area').style.display = 'flex';
 
+    let bpm = parseInt(document.getElementById('speed-slider').value) || 120;
+    // 將延遲從毫秒(ms)轉換為秒(s)，因為 Tone.now() 吃秒數
+    currentStepDelaySec = ((60000 / bpm) / 2) / 1000; 
+    audioStartTime = Tone.now() + 0.1; // 給系統 0.1 秒的緩衝時間
+
+    // 1. 【音頻排程】將整首歌的所有音符，一次性預先餵給底層硬體時脈
     for (let i = 0; i < paperTapeData.length; i++) {
-        if (!isPlaying) break; 
-        
         let notesToPlay = lut[paperTapeData[i]]; 
         if (notesToPlay && notesToPlay.length > 0) {
             let freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
-            synth.triggerAttackRelease(freqStrings, "8n");
+            let exactTime = audioStartTime + (i * currentStepDelaySec);
+            synth.triggerAttackRelease(freqStrings, "8n", exactTime);
         }
-
-        document.getElementById('playback-progress').value = i + 1;
-        document.getElementById('progress-text').innerText = `${i + 1} / ${paperTapeData.length}`;
-        drawCanvas(paperTapeData, i);
-
-        let bpm = parseInt(document.getElementById('speed-slider').value) || 120;
-        let stepDelayMs = (60000 / bpm) / 2; 
-        await new Promise(r => setTimeout(r, stepDelayMs));
     }
     
+    // 2. 【視覺排程】啟動獨立的動畫執行緒
+    animationFrameId = requestAnimationFrame(updateVisualPlayhead);
+}
+
+// 🌟 全新重構：解耦視覺追蹤器
+function updateVisualPlayhead() {
+    if (!isPlaying) return;
+    
+    // 偷看現在的硬體時間，反推目前應該播到第幾個網格
+    let currentTime = Tone.now();
+    let elapsedSec = currentTime - audioStartTime;
+    let currentStep = Math.floor(elapsedSec / currentStepDelaySec);
+
+    // 播放完畢的判斷
+    if (currentStep >= paperTapeData.length) {
+        stopPlayback();
+        return;
+    }
+
+    // 只有當「網格位置真的改變時」才重新渲染畫面，大幅節省 CPU 資源
+    if (currentStep !== lastRenderedStep && currentStep >= 0) {
+        lastRenderedStep = currentStep;
+        document.getElementById('playback-progress').value = currentStep + 1;
+        document.getElementById('progress-text').innerText = `${currentStep + 1} / ${paperTapeData.length}`;
+        drawCanvas(paperTapeData, currentStep);
+    }
+
+    // 呼叫下一幀動畫
+    animationFrameId = requestAnimationFrame(updateVisualPlayhead);
+}
+
+// 🌟 全新重構：安全停止機制 (清除音軌記憶體與排程)
+function stopPlayback() {
     isPlaying = false;
-    document.getElementById('play-btn').disabled = false; document.getElementById('stop-btn').disabled = true;
-    drawCanvas(paperTapeData, -1); 
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    if (synth) synth.releaseAll(); // 強制靜音所有未發出的排程音符
+    
+    document.getElementById('play-btn').disabled = false; 
+    document.getElementById('stop-btn').disabled = true;
+    drawCanvas(paperTapeData, -1); // 消除紅色標記線
 }
 
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
-document.getElementById('stop-btn').addEventListener('click', () => { isPlaying = false; drawCanvas(paperTapeData, -1); });
+document.getElementById('stop-btn').addEventListener('click', stopPlayback);
 
-// --- 🌟 IoT Wi-Fi 傳輸引擎 (已修復 Scope 錯誤) ---
+// IoT 無線傳輸引擎保持不變
 document.getElementById('wifi-btn').addEventListener('click', async () => {
     const ip = document.getElementById('esp-ip').value.trim();
     if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
@@ -361,14 +407,13 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
     btn.innerText = "⏳ 傳送中..."; btn.disabled = true;
 
     try {
-        // 🌟 在這裡獨立讀取 BPM 並計算毫秒延遲，避免找不到變數
         let currentBpm = parseInt(document.getElementById('speed-slider').value) || 120;
         let calculatedDelayMs = (60000 / currentBpm) / 2;
 
         const payload = { 
             song_length: paperTapeData.length, 
             score: paperTapeData,
-            delay_ms: calculatedDelayMs // 將計算好的速度傳遞給 ESP32
+            delay_ms: calculatedDelayMs 
         };
         
         const response = await fetch(`http://${ip}/upload`, {

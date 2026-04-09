@@ -9,8 +9,8 @@
 // ==========================================
 // 🌐 區域網路 (Wi-Fi) 設定
 // ==========================================
-const char* ssid = "YOUR_WIFI_SSID";       // ⚠️ 填入你的 Wi-Fi 名稱
-const char* password = "YOUR_WIFI_PASSWORD"; // ⚠️ 填入你的 Wi-Fi 密碼
+const char* ssid = "ED417B";       // ⚠️ 填入你的 Wi-Fi 名稱
+const char* password = "41724172"; // ⚠️ 填入你的 Wi-Fi 密碼
 WebServer server(80);
 
 // ==========================================
