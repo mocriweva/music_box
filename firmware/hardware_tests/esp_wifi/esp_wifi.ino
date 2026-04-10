@@ -7,8 +7,8 @@
 
 // --- 🌐 區域網路 (Wi-Fi) 設定區 ---
 // ⚠️ 請填寫你家裡或手機分享的 Wi-Fi 資訊
-const char* ssid = "ED417C";       
-const char* password = "4172417@"; 
+const char* ssid = "ED417B";       
+const char* password = "41724172"; 
 
 WebServer server(80);
 
