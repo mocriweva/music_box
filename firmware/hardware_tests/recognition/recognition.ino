@@ -10,7 +10,7 @@ void setup() {
 
 void loop() {
   // 只掃描 0 到 6 號通道 (共 7 顆)
-  for (int channel = 0; channel < 7; channel++) {
+  for (int channel = 0; channel < 16; channel++) {
     digitalWrite(pin_S0, bitRead(channel, 0)); 
     digitalWrite(pin_S1, bitRead(channel, 1));
     digitalWrite(pin_S2, bitRead(channel, 2));
