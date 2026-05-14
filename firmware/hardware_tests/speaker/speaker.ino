@@ -81,13 +81,6 @@ void loop() {
   Serial.println("▶️ 播放《歡樂頌》...");
   
   // 第一句：Mi Mi Fa Sol, Sol Fa Mi Re
-  playNote(Mi, 500); playNote(Mi, 500); playNote(Fa, 500); playNote(Sol, 500);
-  playNote(Sol, 500); playNote(Fa, 500); playNote(Mi, 500); playNote(Re, 500);
-  
-  // 第二句：Do Do Re Mi, Mi(長) Re(短) Re(極長)
-  playNote(Do, 500); playNote(Do, 500); playNote(Re, 500); playNote(Mi, 500);
-  playNote(Mi, 750); playNote(Re, 250); playNote(Re, 1000);
-  
-  Serial.println("⏸️ 休息 3 秒...");
+  playNote(Mi, 500);
   delay(3000); 
 }

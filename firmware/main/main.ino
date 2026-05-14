@@ -9,44 +9,43 @@
 // ==========================================
 // 🌐 區域網路 (Wi-Fi) 設定
 // ==========================================
-const char* ssid = "ED417B";       // ⚠️ 填入你的 Wi-Fi 名稱
-const char* password = "41724172"; // ⚠️ 填入你的 Wi-Fi 密碼
+const char* ssid = "ED417C";       
+const char* password = "4172417@"; 
 WebServer server(80);
 
 // ==========================================
 // 🔌 硬體腳位定義 (Pin Definitions)
 // ==========================================
-// 1. I2S 擴大機 (MAX98357A)
 #define I2S_LRC  25  
 #define I2S_BCLK 26  
 #define I2S_DOUT 22  
 
-// 2. 步進馬達 (28BYJ-48) (移除按鈕腳位)
 const int stepsPerRevolution = 2048;
 Stepper myStepper(stepsPerRevolution, 13, 27, 14, 33);
 
-// 3. TCRT5000 感測器陣列 (CD74HC4051 多工器)
 const int pin_S0 = 16, pin_S1 = 17, pin_S2 = 18, pin_S3 = 19;
 const int pin_SIG = 34; 
 
 // ==========================================
 // 🧠 全自動狀態機與參數
 // ==========================================
-// 🌟 拔除按鈕，改為預設啟動實體模式
 bool isWebPlaying = false;      
 bool isPhysicalPlaying = true;  
+bool last_sensor_state[8] = {false}; // 用來記錄上一次的感測器狀態
 
-// 網頁樂譜記憶體
 std::vector<int> currentScore;
 int currentStep = 0;
 unsigned long lastStepTime = 0;
 int stepDelayMs = 250; 
 
-// 感測器邊緣觸發參數
-bool current_sensor_state[7] = {false};
-bool last_sensor_state[7] = {false};
-const int THRESHOLD_H[7] = {1850, 1850, 1850, 1850, 1850, 1850, 1850};
-const int THRESHOLD_L[7] = {1600, 1600, 1600, 1600, 1600, 1600, 1600};
+// 感測器參數 (已套用 3400~3600 遲滯區間)
+bool current_sensor_state[8] = {false};
+const int THRESHOLD_L[8] = {600, 600, 600, 600, 600, 600, 600, 4095};
+const int THRESHOLD_H[8] = {1600, 1400, 1900, 1600, 1600, 1600, 1600, 4095};
+
+int sensor_analog_values[8] = {0};
+unsigned long lastSerialPrintTime = 0; 
+int last_binary_val = 0; // 🌟 記錄上一次的二進位狀態
 
 // ==========================================
 // 🎵 物理音訊引擎 (DSP Parameters)
@@ -59,6 +58,8 @@ const float defaultFreqs[15] = {
     440.00, 493.88, 523.25, 587.33, 659.25, 
     698.46, 783.99, 880.00, 987.77, 1046.50
 };
+
+const char* noteNames[7] = {"Do (C4)", "Re (D4)", "Mi (E4)", "Fa (F4)", "Sol (G4)", "La (A4)", "Si (B4)"};
 
 volatile float targetFreq1 = 0.0, targetFreq2 = 0.0;
 volatile float phase1 = 0.0, phase2 = 0.0;
@@ -106,13 +107,15 @@ void audioTask(void *pvParameters) {
                 sample += sin(phase1) * amp1;
                 phase1 += (TWO_PI * targetFreq1) / SAMPLE_RATE;
                 if (phase1 >= TWO_PI) phase1 -= TWO_PI;
-                amp1 *= 0.99985; 
+                // 🌟 註解掉衰減，讓聲音持續
+                // amp1 *= 0.99985; 
             }
             if (amp2 > 1.0) {
                 sample += sin(phase2) * amp2;
                 phase2 += (TWO_PI * targetFreq2) / SAMPLE_RATE;
                 if (phase2 >= TWO_PI) phase2 -= TWO_PI;
-                amp2 *= 0.99985; 
+                // 🌟 註解掉衰減，讓聲音持續
+                // amp2 *= 0.99985; 
             }
             sampleBuffer[i] = (int16_t)sample;
         }
@@ -120,7 +123,7 @@ void audioTask(void *pvParameters) {
     }
 }
 
-// --- 解碼引擎：121 狀態查表法 ---
+// --- 給網頁專用的查表法解碼器 ---
 void decodeState(int stateID) {
     if (stateID == 0) return; 
     
@@ -150,27 +153,21 @@ void decodeState(int stateID) {
 // ==========================================
 void setup() {
     Serial.begin(115200);
-
-    // 1. 初始化馬達速度
     myStepper.setSpeed(10);
 
-    // 2. 初始化多工器
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT);
     pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
     pinMode(pin_SIG, INPUT);
 
-    // 3. 啟動 I2S
     initI2S();
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);
 
-    // 4. 連線區域網路
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     Serial.print("\n連線 Wi-Fi 中...");
     while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
     Serial.printf("\n✅ 連線成功！IP: %s\n", WiFi.localIP().toString().c_str());
 
-    // 5. 設定 WebServer 路由
     server.on("/upload", HTTP_OPTIONS, []() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         server.sendHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -194,7 +191,6 @@ void setup() {
         Serial.printf("📡 [網頁] 樂譜載入完畢！強制切換至數位播放模式。\n");
         server.send(200, "text/plain", "樂譜接收成功！");
 
-        // 🌟 強制中斷實體模式，優先播放網路樂譜
         isPhysicalPlaying = false; 
         isWebPlaying = true;
         currentStep = 0;
@@ -202,20 +198,17 @@ void setup() {
     });
 
     server.begin();
-    Serial.println("🎸 系統就緒！預設進入【實體感測模式】...");
+    Serial.println("🎸 系統就緒！預設進入【實體二進位測試模式 (長音版)】...");
 }
 
 // ==========================================
 // 🔄 主迴圈 (全自動狀態切換)
 // ==========================================
 void loop() {
-    // 1. 維持網路連線
     server.handleClient(); 
 
-    // 2. 網頁數位播放模式 (優先權最高)
     if (isWebPlaying) {
-        // 馬達持續送出脈衝，如果船型開關有開，馬達就會跟著音樂轉動當特效
-        myStepper.step(10); 
+        myStepper.step(-10); 
         
         if (millis() - lastStepTime >= stepDelayMs) {
             lastStepTime = millis(); 
@@ -223,48 +216,74 @@ void loop() {
                 decodeState(currentScore[currentStep]);
                 currentStep++;
             } else {
-                // 🌟 播完自動切回實體模式
                 isWebPlaying = false;
                 isPhysicalPlaying = true;
-                Serial.println("⏹️ [網頁] 播放結束，自動回歸【實體感測模式】。");
+                // 網頁播完也強制靜音一次，避免殘留聲音
+                amp1 = 0.0; amp2 = 0.0;
+                Serial.println("⏹️ [網頁] 播放結束，自動回歸實體測試模式。");
             }
         }
     }
-
-    // 3. 實體紙帶讀取模式 (預設模式)
     else if (isPhysicalPlaying) {
-        // ESP32 一直在送脈衝，只要你打開船型開關通電，馬達就會立刻帶動紙帶
-        myStepper.step(10); 
+        myStepper.step(-20); // 馬達反轉方向
         
-        int stateID_from_sensors = 0;
-        bool any_rising_edge = false;
+        int current_binary_val = 0;
 
-        // 高速掃描 7 顆感測器 (D1~D7)
+        // 1. 讀取 S0 ~ S6 的感測器狀態
         for (int i = 0; i < 7; i++) {
-            digitalWrite(pin_S0, bitRead(i, 0));
-            digitalWrite(pin_S1, bitRead(i, 1));
+            digitalWrite(pin_S1, bitRead(i, 0));
+            digitalWrite(pin_S0, bitRead(i, 1));
             digitalWrite(pin_S2, bitRead(i, 2));
             digitalWrite(pin_S3, bitRead(i, 3));
-            delayMicroseconds(50); 
             
+            delayMicroseconds(5); 
             int val = analogRead(pin_SIG);
+            val = analogRead(pin_SIG);
+            sensor_analog_values[i] = val; 
             
             if (val > THRESHOLD_H[i]) current_sensor_state[i] = true;
-            else if (val < THRESHOLD_L[i]) current_sensor_state[i] = false;
+            else if (val < THRESHOLD_H[i]) current_sensor_state[i] = false;
 
-            if (current_sensor_state[i]) {
-                stateID_from_sensors |= (1 << i);
+            // ⚠️ 只有 0~5 軌是資料，算進二進位總和。S6 是 Clock 不算入！
+            if (current_sensor_state[i] && i < 6) {
+                // 你之前要求 LSB 換邊，現在只有 6 軌資料，所以是 (5 - i)
+                current_binary_val += (1 << i); 
             }
+        }
 
-            if (current_sensor_state[i] && !last_sensor_state[i]) {
-                any_rising_edge = true;
+        // 2. 🌟 時脈正緣/負緣觸發機制 (Clock 獨立在 S6)
+        if (current_sensor_state[6] && !last_sensor_state[6]) {
+            // 正緣觸發：Clock 剛碰到黑線瞬間，讀取資料並發出長音
+            if (current_binary_val > 0) {
+                Serial.printf("⏱️ [時脈觸發] 讀取到狀態碼: %d\n", current_binary_val);
+                decodeState(current_binary_val);
+                if (current_binary_val >= 1 && current_binary_val <= 7) {
+                    Serial.printf("🎵 發出: %s\n", noteNames[current_binary_val - 1]);
+                }
             }
+        } 
+        else if (!current_sensor_state[6] && last_sensor_state[6]) {
+            // 負緣觸發：Clock 剛離開黑線瞬間，強制靜音
+            Serial.println("🔇 Clock 結束，停止發聲。");
+            amp1 = 0.0;
+            amp2 = 0.0;
+        }
+
+        // 3. 更新記憶狀態，為下一次的邊緣比較做準備
+        for (int i = 0; i < 7; i++) {
             last_sensor_state[i] = current_sensor_state[i];
         }
 
-        // 讀到新的黑點，觸發發聲
-        if (any_rising_edge && stateID_from_sensors > 0) {
-            decodeState(stateID_from_sensors);
+        // 4. 除錯列印 (可註解)
+        if (millis() - lastSerialPrintTime >= 200) {
+            lastSerialPrintTime = millis();
+            
+            Serial.print("感測值: ");
+            for (int i = 0; i < 7; i++) {
+                Serial.printf("[%d]:%4d  ", i, sensor_analog_values[i]);
+            }
+            Serial.println(); 
+            
         }
     }
 }
