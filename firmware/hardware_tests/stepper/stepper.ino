@@ -16,7 +16,7 @@ const unsigned long debounceDelay = 50;
 void setup() {
   Serial.begin(115200);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  myStepper.setSpeed(10); 
+  myStepper.setSpeed(5); 
   
   // 初始化 buttonState 為高電位
   buttonState = digitalRead(BUTTON_PIN);
@@ -26,7 +26,7 @@ void setup() {
 
 void loop() {
   // 1. 讀取當下原始電位
-  int reading = digitalRead(BUTTON_PIN);
+  /*int reading = digitalRead(BUTTON_PIN);
 
   // 2. 如果狀態有變動 (人手按下或雜訊)，重置計時器
   if (reading != lastButtonState) {
@@ -59,8 +59,8 @@ void loop() {
   // ---------------------------------------------------------
   // 4. 馬達執行邏輯 (時間切片)
   // ---------------------------------------------------------
-  if (1) {
+  */if (1) {
     // 每次走 10 步，走完立刻回去檢查按鈕，保持系統高靈敏度
-    myStepper.step(10); 
+    myStepper.step(-10); 
   }
 }

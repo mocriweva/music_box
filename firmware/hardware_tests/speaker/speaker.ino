@@ -74,7 +74,7 @@ void playNote(float freq, int duration_ms) {
   
   // 音符與音符之間加上 20 毫秒的靜音斷點，讓音樂有顆粒感
   i2s_zero_dma_buffer(I2S_NUM_0);
-  delay(20); 
+  //delay(20); 
 }
 
 void loop() {
@@ -82,5 +82,5 @@ void loop() {
   
   // 第一句：Mi Mi Fa Sol, Sol Fa Mi Re
   playNote(Mi, 500);
-  delay(3000); 
+
 }
