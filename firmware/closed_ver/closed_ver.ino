@@ -743,9 +743,12 @@ void setup() {
 // ==========================================
 // 🔄 主迴圈 (全自動狀態切換)
 // ==========================================
+// ==========================================
+// 🔄 主迴圈 (全自動狀態切換與即時監控)
+// ==========================================
 void loop() {
     server.handleClient(); 
-    dnsServer.processNextRequest(); // 🌟 維持 DNS 運作以回應彈窗請求
+    dnsServer.processNextRequest(); // 維持 DNS 運作以回應彈窗請求
 
     if (startCalibrationFlag) {
         startCalibrationFlag = false;
@@ -766,7 +769,7 @@ void loop() {
                 isWebPlaying = false;
                 isPhysicalPlaying = true;
                 amp1 = 0.0; amp2 = 0.0;
-                disableStepper(); // 🌟 播完後斷電
+                disableStepper(); // 播完後斷電
             }
         }
     }
@@ -780,9 +783,11 @@ void loop() {
                 digitalWrite(pin_S2, bitRead(i, 2));
                 digitalWrite(pin_S3, bitRead(i, 3));
                 delayMicroseconds(5); 
+                
                 int val = analogRead(pin_SIG);
-                val = analogRead(pin_SIG);
+                val = analogRead(pin_SIG); // 連續讀取兩次穩定 ADC
                 sensor_analog_values[i] = val; 
+                
                 if (val > (baseline_white[i] + jump_up[i])) {
                     current_sensor_state[i] = true;
                 } 
@@ -805,5 +810,27 @@ void loop() {
 
             for (int i = 0; i < 8; i++) last_sensor_state[i] = current_sensor_state[i];
         }
+    }
+
+    // ==========================================
+    // 📊 序列埠即時監控 (每 300 毫秒輸出一次)
+    // ==========================================
+    if (millis() - lastSerialPrintTime > 300) {
+        lastSerialPrintTime = millis();
+        Serial.print("📡 即時感測 | ");
+        
+        for (int i = 0; i < 8; i++) {
+            // 🌟 靜態除錯機制：如果馬達沒在轉，就手動更新數值方便人工作業
+            if (!isMotorRunning && isPhysicalPlaying) {
+                digitalWrite(pin_S0, bitRead(i, 0));
+                digitalWrite(pin_S1, bitRead(i, 1));
+                digitalWrite(pin_S2, bitRead(i, 2));
+                digitalWrite(pin_S3, bitRead(i, 3));
+                delayMicroseconds(5); 
+                sensor_analog_values[i] = analogRead(pin_SIG);
+            }
+            Serial.printf("S%d:%4d ", i, sensor_analog_values[i]);
+        }
+        Serial.println();
     }
 }
