@@ -648,6 +648,7 @@ void calibrateSensors() {
 // ==========================================
 void setup() {
     Serial.begin(115200);
+    delay(2000);
     myStepper.setSpeed(10);
     
     // 開機預設立刻將馬達斷電

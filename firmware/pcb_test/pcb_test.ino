@@ -76,6 +76,7 @@ void disableStepper() {
 // ==========================================
 void setup() {
     Serial.begin(115200);
+    delay(2000);
     Serial.println("\n\n=== 🛠️ 專案 PCB 裸板檢測專用程式 ===");
 
     // 1. 測試馬達初始化
