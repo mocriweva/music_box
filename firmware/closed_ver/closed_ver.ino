@@ -595,6 +595,9 @@ void decodeState(int stateID) {
 // ==========================================
 // 🔍 開機白紙與黑線全自動雙點校正
 // ==========================================
+// ==========================================
+// 🔍 開機白紙與黑線全自動雙點校正 (動態尋跡升級版)
+// ==========================================
 void calibrateSensors() {
     Serial.println("\n⚙️ [階段 1] 測量白紙基準值...");
     long temp_sum[8] = {0};
@@ -612,37 +615,79 @@ void calibrateSensors() {
         }
         delay(5);
     }
-    for (int i = 0; i < 8; i++) baseline_white[i] = temp_sum[i] / samples;
+    
+    // 初始化基準值
+    for (int i = 0; i < 8; i++) {
+        baseline_white[i] = temp_sum[i] / samples;
+        baseline_black[i] = baseline_white[i]; // 先預設為白紙數值，避免從 0 開始比對
+    }
 
-    Serial.println("⚙️ [階段 2] 尋找校正黑線... 馬達啟動掃描！");
-    for (int step_count = 0; step_count < 150; step_count++) {
+    Serial.println("⚙️ [階段 2] 尋找校正黑線... 馬達啟動動態掃描！");
+    
+    bool blackLineDetected = false;
+    int overTravelCounter = 0;
+    const int overTravelLimit = 70;  // 🌟 關鍵參數：讀到黑線邊緣後，再多走的步數 (可依黑線粗細微調)
+    const int maxSearchSteps = 1000; // 🛡️ 防呆參數：最多找 1000 步，找不到就放棄
+    int step_count = 0;
+
+    while (step_count < maxSearchSteps) {
         myStepper.step(-10); 
+        step_count++;
+        
+        bool currentStepHitBlack = false;
+
         for (int i = 0; i < 8; i++) {
             digitalWrite(pin_S0, bitRead(i, 0));
             digitalWrite(pin_S1, bitRead(i, 1));
             digitalWrite(pin_S2, bitRead(i, 2));
             digitalWrite(pin_S3, bitRead(i, 3));
             delayMicroseconds(5); 
+            
             int val = analogRead(pin_SIG);
+            
+            // 持續記錄看過的最高數值 (峰值捕捉)
             if (val > baseline_black[i]) {
                 baseline_black[i] = val; 
             }
+
+            // 判斷是否碰到黑線：數值比白紙高出  (閥值可依現場光源調整)
+            if (val > (baseline_white[i] + 600)) {
+                currentStepHitBlack = true;
+            }
+        }
+
+        // 第一次發現黑線邊緣
+        if (!blackLineDetected && currentStepHitBlack) {
+            blackLineDetected = true;
+            Serial.println("👀 發現黑線邊緣！啟動過掃描 (Over-travel) 讀取峰值...");
+        }
+
+        // 發現黑線後，開始計算多走的步數
+        if (blackLineDetected) {
+            overTravelCounter++;
+            if (overTravelCounter >= overTravelLimit) {
+                Serial.println("🛑 已完美停在黑線中央，停止掃描。");
+                break; // 成功抓取，強制跳出 while 迴圈
+            }
         }
     }
-    
+
+    if (!blackLineDetected) {
+        Serial.println("⚠️ 警告：超過最大搜尋範圍仍未發現黑線！請確認紙帶是否有放好。");
+    }
+
     // 掃描完畢，停止並釋放馬達電能
     disableStepper();
 
     Serial.println("✅ 校正完成！各通道動態參數如下：");
     for (int i = 0; i < 8; i++) {
         int delta = baseline_black[i] - baseline_white[i];
-        if (delta < 200) delta = 500; 
+        if (delta < 200) delta = 500; // 避免黑白對比太低導致後續誤判
         jump_up[i] = delta * 0.6;   
         jump_down[i] = delta * 0.4; 
     }
     Serial.println("\n🎶 機台已完成校正，進入讀譜待命模式！");
 }
-
 // ==========================================
 // 🚀 系統初始化 (Setup)
 // ==========================================

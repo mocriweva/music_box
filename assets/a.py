@@ -20,7 +20,7 @@ def generate_test_sheet(filename="do_to_si_A4_Pages.pdf"):
     start_x = 30 * mm          
     start_y = 60 * mm    
     # 窄了改這      
-    track_pitch = 11.7 * mm      
+    track_pitch = 11.55 * mm      
     note_height = 5 * mm         
     margin = 10.05 * mm          
     
