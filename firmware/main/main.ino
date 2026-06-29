@@ -176,7 +176,7 @@ void calibrateSensors() {
 
     Serial.println("⚙️ [階段 2] 尋找校正黑線... 馬達啟動掃描！");
     // 讓馬達往前走大約 150 步，掃過校正黑線並停在空白緩衝區
-    for (int step_count = 0; step_count < 150; step_count++) {
+    for (int step_count = 0; step_count < 400; step_count++) {
         myStepper.step(-10); 
         
         for (int i = 0; i < 8; i++) {
@@ -213,6 +213,7 @@ void calibrateSensors() {
 // ==========================================
 void setup() {
     Serial.begin(115200);
+    delay(2000);
     myStepper.setSpeed(10);
 
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT);
@@ -360,7 +361,7 @@ void loop() {
                     current_sensor_state[i] = false;
                 }
 
-                // 只有 0~5 軌是資料，算進二進位總和。S6 是 Clock 不算入！
+                
                 if (current_sensor_state[i] && i < 7) {
                     current_binary_val += (1 << i); 
                 }
