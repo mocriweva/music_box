@@ -4,6 +4,12 @@
 #include <Stepper.h>
 
 // ==========================================
+// 📶 Wi-Fi 熱點設定 (請填入你的手機熱點資訊)
+// ==========================================
+const char* ssid = "你的手機熱點名稱"; 
+const char* password = "你的熱點密碼"; 
+
+// ==========================================
 // 🔌 硬體腳位定義 (Pin Definitions)
 // ==========================================
 #define I2S_LRC  25  
@@ -90,16 +96,25 @@ void setup() {
     pinMode(pin_SIG, INPUT);
     Serial.println("✅ 8通道感測器引腳初始化完成");
 
-    // 3. 測試 Wi-Fi AP 廣播與 MAC 命名
-    WiFi.mode(WIFI_AP);
-    String mac = WiFi.macAddress(); 
-    String macSuffix = mac.substring(9, 11) + mac.substring(12, 14) + mac.substring(15, 17); 
-    String uniqueSSID = "MusicBox_" + macSuffix; 
-    
-    if (WiFi.softAP(uniqueSSID.c_str())) {
-        Serial.printf("✅ Wi-Fi 射頻正常！請用手機尋找 SSID: %s\n", uniqueSSID.c_str());
+    // 3. 測試連線至手機熱點並取得 IP
+    WiFi.mode(WIFI_STA); 
+    WiFi.begin(ssid, password);
+    Serial.printf("🔄 正在連線至 Wi-Fi: %s ", ssid);
+
+    // 等待連線 (設定最多等約 10 秒)
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n✅ Wi-Fi 連線成功！");
+        Serial.print("🌐 裝置 IP 位址: ");
+        Serial.println(WiFi.localIP());
     } else {
-        Serial.println("❌ Wi-Fi 啟動失敗！請檢查供電或晶片是否損壞。");
+        Serial.println("\n❌ Wi-Fi 連線超時！請檢查熱點名稱、密碼，或確認手機熱點已開啟。");
     }
 
     // 4. 測試音訊初始化
