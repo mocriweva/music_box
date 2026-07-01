@@ -9,8 +9,8 @@
 // ==========================================
 // 🌐 區域網路 (Wi-Fi) 設定
 // ==========================================
-const char* ssid = "ED417C";       
-const char* password = "4172417@"; 
+const char* ssid = "林冰飯";       
+const char* password = "shrimpy724"; 
 WebServer server(80);
 
 // ==========================================

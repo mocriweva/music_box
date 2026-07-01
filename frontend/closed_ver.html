@@ -18,7 +18,6 @@
         #pdf-btn { background-color: #007bff; }
         #wifi-btn { background-color: #17a2b8; }
         #wifi-btn:hover:not(:disabled) { background-color: #138496; }
-        #calibrate-btn:hover:not(:disabled) { background-color: #5a32a3; }
         #motor-start-btn { background-color: #ff9800; }
         #motor-start-btn:hover:not(:disabled) { background-color: #e68a00; }
         #motor-stop-btn { background-color: #dc3545; }
@@ -71,6 +70,7 @@
         <progress id="playback-progress" value="0" max="100"></progress>
     </div>
 
+    <!-- 🌟 ESP32 無線與實體機台控制區 -->
     <div class="export-controls" style="background-color: #e8f5e9; border-left: 5px solid #28a745;">
         <div class="input-group">
             <label>📡 ESP32 IP 位址</label>
@@ -80,7 +80,7 @@
         
         <div style="border-left: 2px solid #ccc; margin: 0 10px; height: 40px;"></div>
         
-        <button id="calibrate-btn" style="background-color: #6f42c1;">📐 啟動機台校正</button>
+        <!-- 🌟 新增的實體遙控按鈕 -->
         <button id="motor-start-btn">▶️ 啟動實體馬達</button>
         <button id="motor-stop-btn">⏹️ 停止實體馬達</button>
     </div>
@@ -329,46 +329,43 @@ document.getElementById('pdf-btn').addEventListener('click', () => {
 
 async function playVirtualPaperTape() {
     if (isPlaying) return;
+    await Tone.start(); 
     
-    // 🌟 第一時間就先強制切換按鈕狀態，避免被後續動作卡死
+    if (!synth) {
+        let selectedWaveform = document.getElementById('waveform-select').value;
+        synth = new Tone.PolySynth(Tone.Synth, { 
+            oscillator: { type: selectedWaveform }, 
+            // 🌟 修正：大幅縮短 release 時間，避免音符堆疊
+            envelope: { attack: 0.01, decay: 0.1, sustain: 0.2, release: 0.1 } 
+        }).toDestination();
+        // 🌟 修正：整體音量降低，防止總輸出 Clipping
+        synth.volume.value = -12;
+    }
+    
+    isPlaying = true;
+    lastRenderedStep = -1;
     document.getElementById('play-btn').disabled = true; 
     document.getElementById('stop-btn').disabled = false;
     document.getElementById('progress-area').style.display = 'flex';
 
-    try {
-        await Tone.start(); // 嘗試喚醒瀏覽器音訊引擎
-        
-        if (!synth) {
-            // 🌟 改用更安全、相容性更高的寫法來初始化音色
-            synth = new Tone.PolySynth().toDestination();
-            let selectedWaveform = document.getElementById('waveform-select').value;
-            synth.set({ oscillator: { type: selectedWaveform } });
+    let bpm = parseInt(document.getElementById('speed-slider').value) || 120;
+    currentStepDelaySec = ((60000 / bpm) / 2) / 1000; 
+    audioStartTime = Tone.now() + 0.1; 
+
+    // 🌟 修正：讓發聲長度跟隨 BPM 變化，並保留 20% 空隙避免黏音
+    let dynamicDuration = currentStepDelaySec * 0.8; 
+
+    for (let i = 0; i < paperTapeData.length; i++) {
+        let notesToPlay = lut[paperTapeData[i]]; 
+        if (notesToPlay && notesToPlay.length > 0) {
+            let freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
+            let exactTime = audioStartTime + (i * currentStepDelaySec);
+            // 🌟 修正：將寫死的 "8n" 替換為動態計算的時間
+            synth.triggerAttackRelease(freqStrings, dynamicDuration, exactTime);
         }
-        
-        isPlaying = true;
-        lastRenderedStep = -1;
-
-        let bpm = parseInt(document.getElementById('speed-slider').value) || 120;
-        currentStepDelaySec = ((60000 / bpm) / 2) / 1000; 
-        audioStartTime = Tone.now() + 0.1; 
-
-        for (let i = 0; i < paperTapeData.length; i++) {
-            let notesToPlay = lut[paperTapeData[i]]; 
-            if (notesToPlay && notesToPlay.length > 0) {
-                let freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
-                let exactTime = audioStartTime + (i * currentStepDelaySec);
-                synth.triggerAttackRelease(freqStrings, "8n", exactTime);
-            }
-        }
-        
-        animationFrameId = requestAnimationFrame(updateVisualPlayhead);
-
-    } catch (error) {
-        // 🚨 如果還是出錯，直接跳出警告視窗告訴我們是什麼原因
-        console.error("音效引擎錯誤:", error);
-        alert("⚠️ 網頁音訊播放發生錯誤：\n" + error.message);
-        stopPlayback(); // 發生錯誤時，自動把按鈕恢復原狀
     }
+    
+    animationFrameId = requestAnimationFrame(updateVisualPlayhead);
 }
 
 function updateVisualPlayhead() {
@@ -396,16 +393,11 @@ function updateVisualPlayhead() {
 function stopPlayback() {
     isPlaying = false;
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
-    
-    if (synth) {
-        // 🌟 粗暴但最有效：直接銷毀整台虛擬合成器，強制清空所有未來的音符排程
-        synth.dispose(); 
-        synth = null; // 設為 null，下次按播放就會自動重建一台新的
-    }
+    if (synth) synth.releaseAll(); 
     
     document.getElementById('play-btn').disabled = false; 
     document.getElementById('stop-btn').disabled = true;
-    drawCanvas(paperTapeData, -1); // 把紅色掃描線歸零
+    drawCanvas(paperTapeData, -1); 
 }
 
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
@@ -445,7 +437,7 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
 });
 
 // ==========================================
-// 🌟 全新新增：實體機台遙控 API 引擎
+// 🌟 實體機台遙控 API 引擎
 // ==========================================
 async function controlHardwareMotor(state) {
     const ip = document.getElementById('esp-ip').value.trim();
@@ -463,29 +455,9 @@ async function controlHardwareMotor(state) {
     }
 }
 
-// 🌟 新增：觸發 ESP32 機台感測器校正
-async function triggerCalibration() {
-    const ip = document.getElementById('esp-ip').value.trim();
-    if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
-
-    alert('請確保感測器下方目前是「空白處（無黑線）」，按下確定後將開始校正！');
-
-    try {
-        const response = await fetch(`http://${ip}/calibrate`);
-        if (response.ok) {
-            alert('✅ 已送出校正指令！請觀察實體機台是否開始轉動並掃描黑線。');
-        } else {
-            alert('❌ ESP32 回應錯誤，請確認機台是否開機。');
-        }
-    } catch (err) {
-        alert('❌ 無法連線至 ESP32！\n錯誤細節: ' + err.message);
-    }
-}
-
 // 綁定遙控按鈕事件
 document.getElementById('motor-start-btn').addEventListener('click', () => controlHardwareMotor('start'));
 document.getElementById('motor-stop-btn').addEventListener('click', () => controlHardwareMotor('stop'));
-document.getElementById('calibrate-btn').addEventListener('click', triggerCalibration); // 🌟 綁定校正按鈕
 
 </script>
 </body>

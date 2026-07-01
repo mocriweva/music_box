@@ -6,8 +6,8 @@
 // ==========================================
 // 📶 Wi-Fi 熱點設定 (請填入你的手機熱點資訊)
 // ==========================================
-const char* ssid = "你的手機熱點名稱"; 
-const char* password = "你的熱點密碼"; 
+const char* ssid = "林冰飯"; 
+const char* password = "shrimpy724"; 
 
 // ==========================================
 // 🔌 硬體腳位定義 (Pin Definitions)
@@ -133,12 +133,8 @@ unsigned long lastBeepTime = 0;
 void loop() {
     unsigned long currentMillis = millis();
 
-    // ⚙️ [測試 1] 馬達：週期性轉動與斷電 (轉 2 秒，停 1 秒)
-    if (currentMillis % 3000 < 2000) {
-        myStepper.step(-5); 
-    } else {
-        disableStepper();
-    }
+    // ⚙️ [測試 1] 馬達
+    myStepper.step(-10); 
 
     // 🎵 [測試 2] 喇叭：每 500 毫秒切換一次聲音開關 (嗶-靜音)
     if (currentMillis - lastBeepTime > 500) {
@@ -162,5 +158,6 @@ void loop() {
             Serial.printf("S%d:%4d ", i, val);
         }
         Serial.println();
+        Serial.println(WiFi.localIP());
     }
 }

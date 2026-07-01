@@ -16,8 +16,10 @@ key_C_major = {
 ticks_per_beat = mid.ticks_per_beat
 ticks_per_eighth = int(ticks_per_beat / 2) # 6/8拍：1單位 = 1個八分音符
 
-# --- 2. 核心解析引擎 ---
+# --- 2. 核心解析引擎 (已修正休止符 Delta Time 累加問題) ---
 def parse_and_add_notes(score_string):
+    rest_ticks = 0  # 用來累加休止符與無效音符的時間
+    
     tokens = score_string.split()
     for token in tokens:
         if token == '|': continue
@@ -26,9 +28,13 @@ def parse_and_add_notes(score_string):
             
         note_char, accidental, octaves, duration_str = match.groups()
         duration = float(duration_str.replace('*', '')) if duration_str else 1.0
+        
+        # 計算這個音符或休止符佔用的總 tick 數
+        current_ticks = int(duration * ticks_per_eighth)
             
         if note_char == '0':
-            track.append(Message('note_off', note=0, velocity=0, time=int(duration * ticks_per_eighth)))
+            # 遇到休止符：不要寫入 note_off，而是把時間存起來
+            rest_ticks += current_ticks
             continue
             
         midi_note = key_C_major[note_char]
@@ -38,8 +44,12 @@ def parse_and_add_notes(score_string):
             if char == '^': midi_note += 12
             elif char == 'v': midi_note -= 12
             
-        track.append(Message('note_on', note=midi_note, velocity=80, time=0))
-        track.append(Message('note_off', note=midi_note, velocity=80, time=int(duration * ticks_per_eighth)))
+        # 發聲：把之前累積的休止符時間加在 note_on 的 time 屬性上，作為這段時間的靜默延遲
+        track.append(Message('note_on', note=midi_note, velocity=80, time=rest_ticks))
+        track.append(Message('note_off', note=midi_note, velocity=80, time=current_ticks))
+        
+        # 音符寫入完畢，重置累加器
+        rest_ticks = 0 
 
 # --- 3. 《春日影》完整實體樂譜 ---
 # 語法：[音符][八度]*[拍數] (1拍=八分音符)
