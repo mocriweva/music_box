@@ -2,15 +2,15 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
+#include <driver/ledc.h>
 #include <math.h>
 #include <vector>
-#include <Stepper.h>
 
 // ==========================================
 // 🌐 區域網路 (Wi-Fi) 設定
 // ==========================================
-const char* ssid = "林冰飯";       
-const char* password = "shrimpy724"; 
+const char* ssid = "ED417C";       
+const char* password = "4172417@"; 
 WebServer server(80);
 
 // ==========================================
@@ -20,8 +20,19 @@ WebServer server(80);
 #define I2S_BCLK 26  
 #define I2S_DOUT 22  
 
-const int stepsPerRevolution = 2048;
-Stepper myStepper(stepsPerRevolution, 13, 27, 14, 33);
+// --- 步進馬達腳位 (原 Stepper(steps, 13, 27, 14, 33)) ---
+const int motorPins[4] = {13, 27, 14, 33};
+
+// --- LEDC PWM 通道設定 ---
+// 4 個線圈腳位各自使用一個 LEDC 通道
+const int motorPWMChannels[4] = {4, 5, 6, 7}; // 0~3 保留給其他用途，避免與既有 PWM 衝突
+const int motorPWMFreq = 2500;   // 2 kHz 斬波頻率，可依馬達實測調整 (1k~5k 都可)
+const int motorPWMResolution = 8; // 8-bit -> duty 範圍 0~255
+
+// ⭐ 功率控制參數：數值越小越省電/扭力越小，數值越大扭力越大/越耗電
+// 建議先從 255 (全功率) 開始測試，逐步下調找到「還能穩定轉動」的最小值
+volatile int motorPWMDuty = 200; // 預設約 55% 功率，請依實測調整
+const int motorStepIntervalMs = 3; // 每步間隔 (ms)，數值越小轉速越快
 
 const int pin_S0 = 16, pin_S1 = 17, pin_S2 = 18, pin_S3 = 19;
 const int pin_SIG = 34; 
@@ -33,6 +44,10 @@ const int pin_SIG = 34;
 bool isWebPlaying = false;      
 bool isPhysicalPlaying = true;  
 bool isMotorRunning = false;     
+
+// ⭐ 給 motorTask 讀取的「馬達是否該轉」旗標 (由 loop() 統一更新)
+volatile bool motorShouldRun = false;
+volatile int motorDirection = -1; // 對應原本的 step(-10)，固定反向
 
 bool current_sensor_state[8] = {false};
 bool last_sensor_state[8] = {false}; 
@@ -125,6 +140,55 @@ void audioTask(void *pvParameters) {
     }
 }
 
+// ==========================================
+// ⚙️ 步進馬達 PWM 斬波驅動 (取代 Stepper.h)
+// ==========================================
+
+// 8 步半步序列 (半步能讓運轉更平順、每步扭力波動較小)
+// 欄位對應 motorPins[0..3] = {13, 27, 14, 33}
+static const uint8_t stepSequence[4][4] = {
+    {1,0,1,0},
+    {0,1,1,0},
+    {0,1,0,1},
+    {1,0,0,1}
+};
+
+static int motorStepIndex = 0;
+
+void initMotorPWM() {
+    for (int p = 0; p < 4; p++) {
+        ledcSetup(motorPWMChannels[p], motorPWMFreq, motorPWMResolution);
+        ledcAttachPin(motorPins[p], motorPWMChannels[p]);
+        ledcWrite(motorPWMChannels[p], 0); // 開機先斷電，避免過熱
+    }
+}
+
+// 走一步，duty 決定這一步線圈拿到的平均功率 (0~255)
+void stepOnce(int dir, int duty) {
+    motorStepIndex = (motorStepIndex + dir + 4) % 4;
+    for (int p = 0; p < 4; p++) {
+        ledcWrite(motorPWMChannels[p], stepSequence[motorStepIndex][p] ? duty : 0);
+    }
+}
+
+// 全部斷電：省電、也避免線圈長時間通電發熱
+void motorCoilsOff() {
+    for (int p = 0; p < 4; p++) ledcWrite(motorPWMChannels[p], 0);
+}
+
+// --- 獨立 Task：背景低功率驅動馬達，不再阻塞 loop() ---
+void motorTask(void *pvParameters) {
+    while (true) {
+        if (motorShouldRun) {
+            stepOnce(motorDirection, motorPWMDuty);
+            vTaskDelay(pdMS_TO_TICKS(motorStepIntervalMs));
+        } else {
+            motorCoilsOff();
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+}
+
 // --- 查表法解碼器 ---
 void decodeState(int stateID) {
     if (stateID == 0) {
@@ -175,8 +239,10 @@ void calibrateSensors() {
     for (int i = 0; i < 8; i++) baseline_white[i] = temp_sum[i] / samples;
 
     Serial.println("⚙️ [階段 2] 尋找校正黑線... 馬達啟動掃描！");
-    for (int step_count = 0; step_count < 400; step_count++) {
-        myStepper.step(-10); 
+    // 校正階段直接用 stepOnce() 走 400 步，功率用 motorPWMDuty (與正常運轉一致)
+    for (int step_count = 0; step_count < 1200; step_count++) {
+        stepOnce(motorDirection, motorPWMDuty);
+        delay(motorStepIntervalMs);
         for (int i = 0; i < 8; i++) {
             digitalWrite(pin_S0, bitRead(i, 0));
             digitalWrite(pin_S1, bitRead(i, 1));
@@ -190,6 +256,7 @@ void calibrateSensors() {
             }
         }
     }
+    motorCoilsOff();
 
     Serial.println("✅ 校正完成！各通道動態參數如下：");
     for (int i = 0; i < 8; i++) {
@@ -198,7 +265,6 @@ void calibrateSensors() {
         jump_up[i] = delta * 0.6;   
         jump_down[i] = delta * 0.4; 
         
-        // 🌟 把消失的除錯列印加回來了！
         Serial.printf("通道[%d] 白:%4d | 黑:%4d | 觸發區間: +%d ~ +%d\n", 
                       i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
     }
@@ -211,7 +277,8 @@ void calibrateSensors() {
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    myStepper.setSpeed(10);
+
+    initMotorPWM(); // ⭐ 取代 myStepper.setSpeed(10)
 
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT);
     pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
@@ -267,10 +334,26 @@ void setup() {
         server.send(200, "text/plain", "OK");
     });
 
+    // ⭐ 新增：即時調整馬達 PWM 功率 /motor/power?value=0-255
+    server.on("/motor/power", HTTP_GET, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        if (server.hasArg("value")) {
+            int v = server.arg("value").toInt();
+            v = constrain(v, 0, 255);
+            motorPWMDuty = v;
+            Serial.printf("🌐 [網頁遙控] 馬達功率調整為 %d/255\n", v);
+            server.send(200, "text/plain", "OK");
+        } else {
+            server.send(400, "text/plain", "缺少 value 參數");
+        }
+    });
+
     server.begin(); 
 
     initI2S();
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);
+    // ⭐ 馬達 Task 放 core 0，避免跟音訊 Task (core 1) 搶資源
+    xTaskCreatePinnedToCore(motorTask, "MotorTask", 2048, NULL, 1, NULL, 0);
 
     while (Serial.available()) { Serial.read(); }
 
@@ -295,15 +378,6 @@ void setup() {
                 break; 
             }
         }
-        
-        // 🌟 強化的硬體脈衝過濾器 (Debounce 延長為 200ms)
-        /*if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) {
-            delay(200); // 延長判定時間，濾掉 Serial Monitor 打開時造成的 DTR/RTS 突波
-            if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) { 
-                while(digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW); 
-                break; 
-            }
-        }*/
         delay(10); 
     }
 
@@ -318,9 +392,10 @@ void setup() {
 void loop() {
     server.handleClient(); 
 
+    // ⭐ 統一在這裡把「該不該轉」的邏輯，同步給 motorTask
+    motorShouldRun = isWebPlaying || (isPhysicalPlaying && isMotorRunning);
+
     if (isWebPlaying) {
-        myStepper.step(-10); 
-        
         if (millis() - lastStepTime >= (stepDelayMs * 0.85)) {
             amp1 = 0.0;
             amp2 = 0.0;
@@ -341,7 +416,6 @@ void loop() {
     }
     else if (isPhysicalPlaying) {
         if (isMotorRunning) {
-            myStepper.step(-10); 
             int current_binary_val = 0;
 
             for (int i = 0; i < 8; i++) {
@@ -380,6 +454,12 @@ void loop() {
             for (int i = 0; i < 8; i++) {
                 last_sensor_state[i] = current_sensor_state[i];
             }
+
+            Serial.print("感測值: ");
+                for (int i = 0; i < 8; i++) {
+                    Serial.printf("[%d]:%4d  ", i, current_sensor_state[i]);
+                }
+                Serial.println(); 
         } 
     }
 }
