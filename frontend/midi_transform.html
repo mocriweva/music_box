@@ -83,12 +83,20 @@
         <!-- 🌟 新增的實體遙控按鈕 -->
         <button id="motor-start-btn">▶️ 啟動實體馬達</button>
         <button id="motor-stop-btn">⏹️ 停止實體馬達</button>
+
+        <div style="border-left: 2px solid #ccc; margin: 0 10px; height: 40px;"></div>
+
+        <!-- 🌟 新增：馬達 PWM 功率控制 -->
+        <div class="input-group">
+            <label>⚡ 馬達功率 (PWM): <span id="motor-power-val">140</span> / 255</label>
+            <input type="range" id="motor-power-slider" min="0" max="255" value="140" style="width: 180px;">
+        </div>
     </div>
 
     <div class="export-controls">
-        <div class="input-group"><label>X孔距 (mm)</label><input type="number" id="spacing-x-mm" min="2" max="20" step="0.5" value="5"></div>
-        <div class="input-group"><label>Y軌距 (mm)</label><input type="number" id="spacing-y-mm" min="2" max="20" step="0.5" value="10"></div>
-        <div class="input-group"><label>每行網格數</label><input type="number" id="steps-per-row" min="50" max="500" step="10" value="120"></div>
+        <div class="input-group"><label>X孔距 (mm)</label><input type="number" id="spacing-x-mm" min="2" max="50" step="0.5" value="30"></div>
+        <div class="input-group"><label>Y軌距 (mm)</label><input type="number" id="spacing-y-mm" min="2" max="20" step="0.01" value="11.55"></div>
+        <div class="input-group"><label>每行網格數</label><input type="number" id="steps-per-row" min="1" max="500" step="1" value="8"></div>
         <button id="pdf-btn" disabled>📄 匯出 A4 分頁紙帶</button>
     </div>
 
@@ -335,8 +343,11 @@ async function playVirtualPaperTape() {
         let selectedWaveform = document.getElementById('waveform-select').value;
         synth = new Tone.PolySynth(Tone.Synth, { 
             oscillator: { type: selectedWaveform }, 
-            envelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 1 } 
+            // 🌟 修正：大幅縮短 release 時間，避免音符堆疊
+            envelope: { attack: 0.01, decay: 0.1, sustain: 0.2, release: 0.1 } 
         }).toDestination();
+        // 🌟 修正：整體音量降低，防止總輸出 Clipping
+        synth.volume.value = -12;
     }
     
     isPlaying = true;
@@ -349,12 +360,16 @@ async function playVirtualPaperTape() {
     currentStepDelaySec = ((60000 / bpm) / 2) / 1000; 
     audioStartTime = Tone.now() + 0.1; 
 
+    // 🌟 修正：讓發聲長度跟隨 BPM 變化，並保留 20% 空隙避免黏音
+    let dynamicDuration = currentStepDelaySec * 0.8; 
+
     for (let i = 0; i < paperTapeData.length; i++) {
         let notesToPlay = lut[paperTapeData[i]]; 
         if (notesToPlay && notesToPlay.length > 0) {
             let freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
             let exactTime = audioStartTime + (i * currentStepDelaySec);
-            synth.triggerAttackRelease(freqStrings, "8n", exactTime);
+            // 🌟 修正：將寫死的 "8n" 替換為動態計算的時間
+            synth.triggerAttackRelease(freqStrings, dynamicDuration, exactTime);
         }
     }
     
@@ -430,7 +445,7 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
 });
 
 // ==========================================
-// 🌟 全新新增：實體機台遙控 API 引擎
+// 🌟 實體機台遙控 API 引擎
 // ==========================================
 async function controlHardwareMotor(state) {
     const ip = document.getElementById('esp-ip').value.trim();
@@ -451,6 +466,40 @@ async function controlHardwareMotor(state) {
 // 綁定遙控按鈕事件
 document.getElementById('motor-start-btn').addEventListener('click', () => controlHardwareMotor('start'));
 document.getElementById('motor-stop-btn').addEventListener('click', () => controlHardwareMotor('stop'));
+
+// ==========================================
+// 🌟 馬達 PWM 功率控制
+// ==========================================
+async function setMotorPower(value) {
+    const ip = document.getElementById('esp-ip').value.trim();
+    if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
+
+    try {
+        const response = await fetch(`http://${ip}/motor/power?value=${value}`);
+        if (response.ok) {
+            console.log(`📡 指令成功：馬達功率已設為 ${value}/255`);
+        } else {
+            alert('❌ ESP32 回應錯誤，請確認機台是否開機且 IP 正確。');
+        }
+    } catch (err) {
+        alert('❌ 無法連線至 ESP32！\n錯誤細節: ' + err.message);
+    }
+}
+
+let motorPowerDebounceTimer = null;
+const motorPowerSlider = document.getElementById('motor-power-slider');
+const motorPowerVal = document.getElementById('motor-power-val');
+
+motorPowerSlider.addEventListener('input', (e) => {
+    // 拖曳滑桿時即時更新畫面上的數字
+    motorPowerVal.innerText = e.target.value;
+
+    // 防抖動：停止拖曳 150ms 後才真正送出請求，避免拖曳過程瘋狂打 API
+    clearTimeout(motorPowerDebounceTimer);
+    motorPowerDebounceTimer = setTimeout(() => {
+        setMotorPower(e.target.value);
+    }, 150);
+});
 
 </script>
 </body>

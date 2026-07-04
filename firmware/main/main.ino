@@ -2,9 +2,9 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
+#include <driver/ledc.h>
 #include <math.h>
 #include <vector>
-#include <Stepper.h>
 
 // ==========================================
 // 🌐 區域網路 (Wi-Fi) 設定
@@ -20,8 +20,16 @@ WebServer server(80);
 #define I2S_BCLK 26  
 #define I2S_DOUT 22  
 
-const int stepsPerRevolution = 2048;
-Stepper myStepper(stepsPerRevolution, 13, 27, 14, 33);
+// --- 步進馬達腳位 ---
+const int motorPins[4] = {13, 27, 14, 33};
+
+// --- LEDC PWM 通道設定 ---
+const int motorPWMChannels[4] = {4, 5, 6, 7}; 
+const int motorPWMFreq = 2500;   
+const int motorPWMResolution = 8; 
+
+volatile int motorPWMDuty = 200; 
+const int motorStepIntervalMs = 3; 
 
 const int pin_S0 = 16, pin_S1 = 17, pin_S2 = 18, pin_S3 = 19;
 const int pin_SIG = 34; 
@@ -33,6 +41,9 @@ const int pin_SIG = 34;
 bool isWebPlaying = false;      
 bool isPhysicalPlaying = true;  
 bool isMotorRunning = false;     
+
+volatile bool motorShouldRun = false;
+volatile int motorDirection = -1; 
 
 bool current_sensor_state[8] = {false};
 bool last_sensor_state[8] = {false}; 
@@ -51,39 +62,6 @@ int jump_up[8] = {0};
 int jump_down[8] = {0}; 
 
 // ==========================================
-// 🔋 馬達高阻抗省電控制 (Software Enable/Disable)
-// ==========================================
-unsigned long lastStepTimeGlobal = 0;
-bool motorIsActive = true; 
-
-void disableStepper() {
-    pinMode(13, INPUT);
-    pinMode(27, INPUT);
-    pinMode(14, INPUT);
-    pinMode(33, INPUT);
-    motorIsActive = false;
-}
-
-void enableStepper() {
-    pinMode(13, OUTPUT);
-    pinMode(27, OUTPUT);
-    pinMode(14, OUTPUT);
-    pinMode(33, OUTPUT);
-    myStepper = Stepper(stepsPerRevolution, 13, 27, 14, 33);
-    myStepper.setSpeed(10);
-    motorIsActive = true;
-}
-
-void safeStep(int steps) {
-    if (!motorIsActive) {
-        enableStepper();
-        delay(10); 
-    }
-    myStepper.step(steps);
-    lastStepTimeGlobal = millis(); 
-}
-
-// ==========================================
 // 🎵 物理音訊引擎 (DSP Parameters)
 // ==========================================
 #define SAMPLE_RATE 44100
@@ -100,9 +78,9 @@ const char* noteNames[7] = {"Do (C4)", "Re (D4)", "Mi (E4)", "Fa (F4)", "Sol (G4
 volatile float targetFreq1 = 0.0, targetFreq2 = 0.0;
 volatile float phase1 = 0.0, phase2 = 0.0;
 volatile float amp1 = 0.0, amp2 = 0.0;
+volatile float maxAmp1 = 15000.0, maxAmp2 = 15000.0; 
+volatile bool attack1 = false, attack2 = false;
 
-// 🌟 新增淡入 (Attack) 狀態旗標
-volatile bool attack1 = false, attack2 = false; 
 
 // --- I2S 初始化 ---
 void initI2S() {
@@ -127,16 +105,16 @@ void initI2S() {
     i2s_set_clk(I2S_NUM_0, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
 }
 
-// --- 獨立核心 1：物理音訊合成器 ---
+
+// --- 獨立核心 1：物理音訊合成器 (含 Attack & Decay) ---
 void audioTask(void *pvParameters) {
     int16_t sampleBuffer[NUM_SAMPLES];
     size_t bytesWritten;
     
     const float decayFactor = 0.9999; 
-    const float attackStep = 500.0; // 🌟 每次循環增加，直到達標，消除突波
+    const float attackStep = 500.0; 
 
     while (true) {
-        // 如果沒在播放，且已經衰減完畢，且沒有在淡入，就送空陣列省電
         if (!isWebPlaying && !isPhysicalPlaying && amp1 < 1.0 && amp2 < 1.0 && !attack1 && !attack2) {
             memset(sampleBuffer, 0, sizeof(sampleBuffer));
             i2s_write(I2S_NUM_0, sampleBuffer, sizeof(sampleBuffer), &bytesWritten, portMAX_DELAY);
@@ -147,15 +125,15 @@ void audioTask(void *pvParameters) {
         for (int i = 0; i < NUM_SAMPLES; i++) {
             float sample = 0;
             
-            // --- 通道 1 處理 ---
+            // 通道 1 處理 
             if (attack1) {
-                amp1 += attackStep; // 淡入 (Attack)
-                if (amp1 >= 15000.0) {
-                    amp1 = 15000.0;
-                    attack1 = false; // 達標，切換為衰減模式
+                amp1 += attackStep; 
+                if (amp1 >= maxAmp1) {  // 🌟 改變點：上限改為動態變數
+                    amp1 = maxAmp1;
+                    attack1 = false; 
                 }
             } else if (amp1 > 1.0) {
-                amp1 *= decayFactor; // 衰減 (Decay)
+                amp1 *= decayFactor; 
             }
 
             if (amp1 > 1.0 || attack1) {
@@ -164,15 +142,15 @@ void audioTask(void *pvParameters) {
                 if (phase1 >= TWO_PI) phase1 -= TWO_PI;
             }
 
-            // --- 通道 2 處理 ---
+            // 通道 2 處理
             if (attack2) {
-                amp2 += attackStep; // 淡入 (Attack)
-                if (amp2 >= 15000.0) {
-                    amp2 = 15000.0;
+                amp2 += attackStep; 
+                if (amp2 >= maxAmp2) {  // 🌟 改變點：上限改為動態變數
+                    amp2 = maxAmp2;
                     attack2 = false; 
                 }
             } else if (amp2 > 1.0) {
-                amp2 *= decayFactor; // 衰減 (Decay)
+                amp2 *= decayFactor; 
             }
 
             if (amp2 > 1.0 || attack2) {
@@ -187,23 +165,61 @@ void audioTask(void *pvParameters) {
     }
 }
 
+// ==========================================
+// ⚙️ 步進馬達 PWM 斬波驅動 
+// ==========================================
+static const uint8_t stepSequence[4][4] = {
+    {1,0,1,0}, {0,1,1,0}, {0,1,0,1}, {1,0,0,1}
+};
+
+static int motorStepIndex = 0;
+
+void initMotorPWM() {
+    for (int p = 0; p < 4; p++) {
+        ledcSetup(motorPWMChannels[p], motorPWMFreq, motorPWMResolution);
+        ledcAttachPin(motorPins[p], motorPWMChannels[p]);
+        ledcWrite(motorPWMChannels[p], 0); 
+    }
+}
+
+void stepOnce(int dir, int duty) {
+    motorStepIndex = (motorStepIndex + dir + 4) % 4;
+    for (int p = 0; p < 4; p++) {
+        ledcWrite(motorPWMChannels[p], stepSequence[motorStepIndex][p] ? duty : 0);
+    }
+}
+
+void motorCoilsOff() {
+    for (int p = 0; p < 4; p++) ledcWrite(motorPWMChannels[p], 0);
+}
+
+// --- 獨立 Task：背景低功率驅動馬達 (Core 0) ---
+void motorTask(void *pvParameters) {
+    while (true) {
+        if (motorShouldRun) {
+            stepOnce(motorDirection, motorPWMDuty);
+            vTaskDelay(pdMS_TO_TICKS(motorStepIntervalMs));
+        } else {
+            motorCoilsOff();
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+}
+
 // --- 查表法解碼器 ---
 void decodeState(int stateID) {
-    // 🌟 在切換前，快速將目前振幅降為 0，避免產生突波
-    amp1 = 0.0; 
-    amp2 = 0.0;
-    attack1 = false;
-    attack2 = false;
-    
-    // 短暫延遲，讓 Buffer 中的舊資料消散
+    amp1 = 0.0; amp2 = 0.0; 
+    attack1 = false; attack2 = false;
     delay(1); 
 
     if (stateID == 0) return; 
     
     if (stateID >= 1 && stateID <= 15) {
         targetFreq1 = defaultFreqs[stateID - 1];
-        phase1 = 0; // 相位歸零，防止波形跳變
-        attack1 = true; // 觸發淡入，讓 audioTask 自動拉升振幅
+        phase1 = 0; 
+        maxAmp1 = 28000.0; // 🌟 單音獨佔幾乎全部的數位位元深度 (Max 32767)
+        maxAmp2 = 0.0;
+        attack1 = true; 
     } 
     else if (stateID >= 16 && stateID <= 120) {
         int index = 16;
@@ -213,8 +229,9 @@ void decodeState(int stateID) {
                     targetFreq1 = defaultFreqs[i];
                     targetFreq2 = defaultFreqs[j];
                     phase1 = 0; phase2 = 0;
-                    attack1 = true; 
-                    attack2 = true; // 觸發淡入
+                    maxAmp1 = 14000.0; // 🌟 雙音各分一半，總能量維持在 28000
+                    maxAmp2 = 14000.0;
+                    attack1 = true; attack2 = true;
                     return;
                 }
                 index++;
@@ -243,7 +260,6 @@ void calibrateSensors() {
         }
         delay(5);
     }
-    
     for (int i = 0; i < 8; i++) {
         baseline_white[i] = temp_sum[i] / samples;
         baseline_black[i] = baseline_white[i]; 
@@ -253,14 +269,15 @@ void calibrateSensors() {
     
     bool blackLineDetected = false; 
     bool blackLinePassed = false;   
-    
     int bufferSteps = 0;
     const int bufferLimit = 40;     
     const int maxSearchSteps = 1500; 
     int step_count = 0;
 
+    // 校正階段手動推進馬達，不觸發 motorShouldRun
     while (step_count < maxSearchSteps) {
-        safeStep(-10); 
+        stepOnce(motorDirection, motorPWMDuty);
+        delay(motorStepIntervalMs);
         step_count++;
         
         bool currentStepHitBlack = false;
@@ -273,11 +290,9 @@ void calibrateSensors() {
             delayMicroseconds(5); 
             
             int val = analogRead(pin_SIG);
-            
             if (val > baseline_black[i]) {
                 baseline_black[i] = val; 
             }
-
             if (val > (baseline_white[i] + 400)) {
                 currentStepHitBlack = true;
             }
@@ -308,21 +323,20 @@ void calibrateSensors() {
         Serial.println("⚠️ 警告：超過最大搜尋範圍仍未發現黑線！請確認紙帶是否有放好。");
     }
 
-    disableStepper();
+    motorCoilsOff(); // 掃描完畢斷電省電
 
     Serial.println("✅ 校正完成！各通道動態參數如下：");
     for (int i = 0; i < 8; i++) {
         int delta = baseline_black[i] - baseline_white[i];
-        if (delta < 200) delta = 500; 
+        if (delta < 200) delta = 500;
         jump_up[i] = delta * 0.6;   
         jump_down[i] = delta * 0.4; 
         
         Serial.printf("通道[%d] 白:%4d | 黑:%4d | 觸發區間: +%d ~ +%d\n", 
                       i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
-                      
-        delay(5); 
+        delay(5); // 🌟 避免 UART 緩衝區溢位導致破圖
     }
-    Serial.println("\n🎶 機台已完成校正，進入讀譜待命模式！");
+    Serial.println("\n🎶 進入讀譜待命模式！(等待網頁啟動指令...)");
 }
 
 // ==========================================
@@ -331,13 +345,14 @@ void calibrateSensors() {
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    
-    enableStepper(); 
+
+    initMotorPWM(); 
+    motorCoilsOff(); // 開機先確保馬達斷電
 
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT);
     pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
     pinMode(pin_SIG, INPUT);
-    pinMode(0, INPUT_PULLUP);             
+    pinMode(0, INPUT_PULLUP);              
     pinMode(START_BTN_PIN, INPUT_PULLUP); 
 
     WiFi.mode(WIFI_STA);
@@ -372,7 +387,6 @@ void setup() {
         isWebPlaying = true;
         currentStep = 0;
         lastStepTime = millis();
-        lastStepTimeGlobal = millis(); 
     });
 
     server.on("/motor", HTTP_GET, []() {
@@ -380,7 +394,6 @@ void setup() {
         String state = server.arg("state");
         if (state == "start") {
             isMotorRunning = true;
-            lastStepTimeGlobal = millis(); 
             Serial.println("🌐 [網頁遙控] 馬達已啟動！");
         } else if (state == "stop") {
             isMotorRunning = false;
@@ -390,13 +403,27 @@ void setup() {
         server.send(200, "text/plain", "OK");
     });
 
+    server.on("/motor/power", HTTP_GET, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        if (server.hasArg("value")) {
+            int v = server.arg("value").toInt();
+            v = constrain(v, 0, 255);
+            motorPWMDuty = v;
+            Serial.printf("🌐 [網頁遙控] 馬達功率調整為 %d/255\n", v);
+            server.send(200, "text/plain", "OK");
+        } else {
+            server.send(400, "text/plain", "缺少 value 參數");
+        }
+    });
+
     server.begin(); 
 
     initI2S();
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(motorTask, "MotorTask", 2048, NULL, 1, NULL, 0);
 
+    // 🌟 進入等待迴圈前，強制清空 Serial 緩衝區裡的開機雜訊
     while (Serial.available()) { Serial.read(); }
-    disableStepper(); 
 
     Serial.println("\n⏸️ 系統已就緒，請選擇運作模式：");
     Serial.println("👉 實機模式：放入紙帶後，按 BOOT 鍵或【啟動按鈕】進行校正。");
@@ -420,6 +447,7 @@ void setup() {
             }
         }
         
+        // 🌟 強化的硬體脈衝過濾器 (Debounce 200ms)
         /*if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) {
             delay(200); 
             if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) { 
@@ -441,14 +469,11 @@ void setup() {
 void loop() {
     server.handleClient(); 
 
-    if (motorIsActive && (millis() - lastStepTimeGlobal > 2000)) {
-        disableStepper();
-        Serial.println("💤 馬達進入軟體省電模式 (高阻抗隔離)");
-    }
+    // ⭐ 統一在這裡把「該不該轉」的邏輯，同步給 motorTask
+    // (motorTask 內部會自行判斷，不轉時自動呼叫 motorCoilsOff() 斷電)
+    motorShouldRun = isWebPlaying || (isPhysicalPlaying && isMotorRunning);
 
     if (isWebPlaying) {
-        safeStep(-10); 
-        
         if (millis() - lastStepTime >= (stepDelayMs * 0.85)) {
             amp1 = 0.0; amp2 = 0.0; attack1 = false; attack2 = false;
         }
@@ -468,7 +493,6 @@ void loop() {
     }
     else if (isPhysicalPlaying) {
         if (isMotorRunning) {
-            safeStep(-10); 
             int current_binary_val = 0;
 
             for (int i = 0; i < 8; i++) {
@@ -500,12 +524,21 @@ void loop() {
                 }
             } 
             else if (!current_sensor_state[7] && last_sensor_state[7]) {
-                amp1 = 0.0; amp2 = 0.0; attack1 = false; attack2 = false;
+                //amp1 = 0.0; amp2 = 0.0; attack1 = false; attack2 = false;
             }
 
             for (int i = 0; i < 8; i++) {
                 last_sensor_state[i] = current_sensor_state[i];
             }
+
+            // 註解或取消註解以下段落以控制是否頻繁印出感測器數值
+            /*
+            Serial.print("感測值: ");
+            for (int i = 0; i < 8; i++) {
+                Serial.printf("[%d]:%4d  ", i, current_sensor_state[i]);
+            }
+            Serial.println(); 
+            */
         } 
     }
 }
