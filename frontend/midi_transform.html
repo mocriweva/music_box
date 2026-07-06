@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>8-Bit 電子音樂盒樂譜編譯器 (雙模全功能控制台)</title>
+    <title>8-Bit 電子音樂盒樂譜編譯器 (雙軌全功能版)</title>
     <script src="https://unpkg.com/@tonejs/midi"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -36,7 +36,7 @@
 
 <div class="container">
     <h1>🎛️ 8-Bit 紙帶樂譜編譯控制台</h1>
-    <div class="subtitle">內建硬體時脈高精度排程器 (Web Audio API 精確同步)</div>
+    <div class="subtitle">內建硬體時脈高精度排程器 (支援實體紙帶模擬 與 無損頻率直出)</div>
     
     <div class="controls" style="background-color: #e2efff; border-left: 5px solid #007bff;">
         <input type="file" id="midi-upload" accept=".mid,.midi">
@@ -52,6 +52,14 @@
         <button id="play-btn" disabled>▶️ 預覽聲音</button>
         <button id="stop-btn" disabled>⏹️ 停止</button>
         
+        <div class="input-group">
+            <label>🎚️ 播放與傳輸模式</label>
+            <select id="playback-mode" style="background-color: #fffae6; border: 1px solid #ffc107;">
+                <option value="0" selected>🎛️ 實體機台限制模式 (雙音 15 音階)</option>
+                <option value="1">🎹 原始無損還原模式 (4和弦 全音域)</option>
+            </select>
+        </div>
+
         <div class="input-group">
             <label>🎹 音色波形</label>
             <select id="waveform-select">
@@ -70,23 +78,21 @@
         <progress id="playback-progress" value="0" max="100"></progress>
     </div>
 
-    <!-- 🌟 ESP32 無線與實體機台控制區 -->
     <div class="export-controls" style="background-color: #e8f5e9; border-left: 5px solid #28a745;">
         <div class="input-group">
             <label>📡 ESP32 IP 位址</label>
             <input type="text" id="esp-ip" value="192.168.4.1" placeholder="192.168.x.x" style="width: 150px;">
         </div>
         <button id="wifi-btn" disabled>📶 無線傳送 JSON 樂譜</button>
+        <button id="wifi-stop-btn" disabled style="background-color: #dc3545;">⏹️ 停止無線播放</button>
         
         <div style="border-left: 2px solid #ccc; margin: 0 10px; height: 40px;"></div>
         
-        <!-- 🌟 新增的實體遙控按鈕 -->
         <button id="motor-start-btn">▶️ 啟動實體馬達</button>
         <button id="motor-stop-btn">⏹️ 停止實體馬達</button>
 
         <div style="border-left: 2px solid #ccc; margin: 0 10px; height: 40px;"></div>
 
-        <!-- 🌟 新增：馬達 PWM 功率控制 -->
         <div class="input-group">
             <label>⚡ 馬達功率 (PWM): <span id="motor-power-val">140</span> / 255</label>
             <input type="range" id="motor-power-slider" min="0" max="255" value="140" style="width: 180px;">
@@ -110,6 +116,7 @@ let currentMidi = null;
 let allowedNotes = [];
 let lut = []; 
 let paperTapeData = []; 
+let originalScoreData = []; // 🌟 新增：存放無損的 4和弦 MIDI 數值陣列
 const MM_TO_PX = 3.779528;
 let synth = null;
 
@@ -194,6 +201,8 @@ document.getElementById('waveform-select').addEventListener('change', (e) => {
 
 function processMidiTrack(trackIndex) {
     let track = currentMidi.tracks[trackIndex];
+    
+    // 計算物理版 (降維轉白鍵)
     let snappedNotes = track.notes.map(n => {
         const ptow = [0, 0, 2, 2, 4, 5, 5, 7, 7, 9, 9, 11];
         return (Math.floor(n.midi / 12)) * 12 + ptow[n.midi % 12];
@@ -209,20 +218,40 @@ function processMidiTrack(trackIndex) {
 
     let minNoteName = Tone.Frequency(allowedNotes[0], "midi").toNote();
     let maxNoteName = Tone.Frequency(allowedNotes[14], "midi").toNote();
-    document.getElementById('detected-range').innerText = `🎯 自動鎖定主旋律最佳音域：${minNoteName} ~ ${maxNoteName}`;
+    document.getElementById('detected-range').innerText = `🎯 自動鎖定主旋律最佳音域：${minNoteName} ~ ${maxNoteName} (僅適用於實體機台模式)`;
 
     const stepTicks = currentMidi.header.ppq / 2; 
     let totalSteps = Math.ceil(Math.max(...track.notes.map(n => n.ticks)) / stepTicks) + 1;
-    let rawGrid = new Array(totalSteps).fill(null).map(() => []); 
+    
+    // 🌟 雙軌解析：同時生成「實體版陣列」與「原始無損陣列」
+    let rawGridPhysical = new Array(totalSteps).fill(null).map(() => []); 
+    let rawGridOriginal = new Array(totalSteps).fill(null).map(() => []);
 
     track.notes.forEach(note => {
         let stepIndex = Math.round(note.ticks / stepTicks);
-        let safeNote = smartMapNote(note.midi); 
-        if (!rawGrid[stepIndex].includes(safeNote)) rawGrid[stepIndex].push(safeNote);
+        if (stepIndex < totalSteps) {
+            // 實體版：過濾半音並摺疊音域
+            let safeNote = smartMapNote(note.midi); 
+            if (!rawGridPhysical[stepIndex].includes(safeNote)) rawGridPhysical[stepIndex].push(safeNote);
+            // 原始版：原汁原味保留所有的音
+            if (!rawGridOriginal[stepIndex].includes(note.midi)) rawGridOriginal[stepIndex].push(note.midi);
+        }
     });
 
-    paperTapeData = rawGrid.map(notes => notes.length === 0 ? 0 : getLookupIndex(notes.slice(0, 2).map(n => smartMapNote(n))));
+    // 實體版編譯 (15 音階雙音查表法)
+    paperTapeData = rawGridPhysical.map(notes => notes.length === 0 ? 0 : getLookupIndex(notes.slice(0, 2).map(n => smartMapNote(n))));
     
+    // 原始版編譯 (提取高音到低音前 4 顆，填補 0)
+    originalScoreData = rawGridOriginal.map(notes => {
+        let sorted = notes.sort((a, b) => b - a); // 由高到低排序，優先保留主旋律高音
+        return [
+            sorted[0] || 0,
+            sorted[1] || 0,
+            sorted[2] || 0,
+            sorted[3] || 0
+        ];
+    });
+
     document.getElementById('playback-progress').max = paperTapeData.length;
     document.getElementById('status').innerText = `✅ 解析完成！共 ${paperTapeData.length} 個物理網格。`;
     drawCanvas(paperTapeData, -1);
@@ -240,11 +269,11 @@ function drawCanvas(data, currentStep = -1) {
     const canvas = document.getElementById('tapeCanvas');
     const ctx = canvas.getContext('2d');
     
-    const spacingX_px = (parseFloat(document.getElementById('spacing-x-mm').value) || 5) * MM_TO_PX;
-    const spacingY_px = (parseFloat(document.getElementById('spacing-y-mm').value) || 10) * MM_TO_PX;
-    const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 120;
-    const rectWidth = spacingX_px * 0.7; 
-    const rectHeight = 3 * MM_TO_PX; 
+    const spacingX_px = (parseFloat(document.getElementById('spacing-x-mm').value) || 30) * MM_TO_PX;
+    const spacingY_px = (parseFloat(document.getElementById('spacing-y-mm').value) || 11.55) * MM_TO_PX;
+    const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 8;
+    const rectWidth = spacingX_px * 0.4; 
+    const rectHeight = 4 * MM_TO_PX; 
     const margin = 20 * MM_TO_PX; 
     
     const totalRows = Math.ceil(data.length / stepsPerRow);
@@ -343,10 +372,8 @@ async function playVirtualPaperTape() {
         let selectedWaveform = document.getElementById('waveform-select').value;
         synth = new Tone.PolySynth(Tone.Synth, { 
             oscillator: { type: selectedWaveform }, 
-            // 🌟 修正：大幅縮短 release 時間，避免音符堆疊
             envelope: { attack: 0.01, decay: 0.1, sustain: 0.2, release: 0.1 } 
         }).toDestination();
-        // 🌟 修正：整體音量降低，防止總輸出 Clipping
         synth.volume.value = -12;
     }
     
@@ -359,16 +386,30 @@ async function playVirtualPaperTape() {
     let bpm = parseInt(document.getElementById('speed-slider').value) || 120;
     currentStepDelaySec = ((60000 / bpm) / 2) / 1000; 
     audioStartTime = Tone.now() + 0.1; 
-
-    // 🌟 修正：讓發聲長度跟隨 BPM 變化，並保留 20% 空隙避免黏音
     let dynamicDuration = currentStepDelaySec * 0.8; 
 
+    // 🌟 網頁端的雙軌分流試聽
+    let mode = parseInt(document.getElementById('playback-mode').value);
+
     for (let i = 0; i < paperTapeData.length; i++) {
-        let notesToPlay = lut[paperTapeData[i]]; 
-        if (notesToPlay && notesToPlay.length > 0) {
-            let freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
+        let freqStrings = [];
+        
+        if (mode === 0) {
+            // 實體機台模式：使用 15音 查表
+            let notesToPlay = lut[paperTapeData[i]]; 
+            if (notesToPlay && notesToPlay.length > 0) {
+                freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
+            }
+        } else {
+            // 原始無損模式：直接提取 4和弦 原音
+            let notesToPlay = originalScoreData[i].filter(n => n > 0);
+            if (notesToPlay.length > 0) {
+                freqStrings = notesToPlay.map(n => Tone.Frequency(n, "midi").toNote());
+            }
+        }
+
+        if (freqStrings.length > 0) {
             let exactTime = audioStartTime + (i * currentStepDelaySec);
-            // 🌟 修正：將寫死的 "8n" 替換為動態計算的時間
             synth.triggerAttackRelease(freqStrings, dynamicDuration, exactTime);
         }
     }
@@ -401,17 +442,28 @@ function updateVisualPlayhead() {
 function stopPlayback() {
     isPlaying = false;
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
-    if (synth) synth.releaseAll(); 
+    
+    if (synth) {
+        synth.releaseAll();
+        synth.dispose(); 
+        synth = null;    
+    }
     
     document.getElementById('play-btn').disabled = false; 
     document.getElementById('stop-btn').disabled = true;
     drawCanvas(paperTapeData, -1); 
+    
+    // 🌟 核心修改：改為呼叫專屬的 web_stop 路由，不再去動馬達
+    const ip = document.getElementById('esp-ip').value.trim();
+    if (ip) {
+        fetch(`http://${ip}/web_stop`).catch(() => {});
+    }
 }
 
 document.getElementById('play-btn').addEventListener('click', playVirtualPaperTape);
 document.getElementById('stop-btn').addEventListener('click', stopPlayback);
 
-// 🌟 傳送虛擬 JSON 樂譜到 ESP32
+// 🌟 傳送資料到 ESP32 (雙模式封裝)
 document.getElementById('wifi-btn').addEventListener('click', async () => {
     const ip = document.getElementById('esp-ip').value.trim();
     if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
@@ -422,12 +474,16 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
     try {
         let currentBpm = parseInt(document.getElementById('speed-slider').value) || 120;
         let calculatedDelayMs = (60000 / currentBpm) / 2;
+        let mode = parseInt(document.getElementById('playback-mode').value);
 
-        const payload = { 
-            song_length: paperTapeData.length, 
-            score: paperTapeData,
-            delay_ms: calculatedDelayMs 
-        };
+        // 依據選擇的模式，送出不同的 JSON 格式
+        let payload = {};
+        if (mode === 0) {
+            payload = { mode: 0, delay_ms: calculatedDelayMs, score: paperTapeData };
+        } else {
+            // 將 2D 陣列攤平為 1D 送給 ESP32，減少微控制器的解析負擔
+            payload = { mode: 1, delay_ms: calculatedDelayMs, score: originalScoreData.flat() };
+        }
         
         const response = await fetch(`http://${ip}/upload`, {
             method: 'POST',
@@ -435,8 +491,12 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
             body: JSON.stringify(payload)
         });
 
-        if (response.ok) alert('✅ 樂譜傳送成功！ESP32 已接收並準備播放！');
+        if (response.ok) alert(`✅ [${mode === 0 ? '實體模式' : '無損模式'}] 樂譜傳送成功！ESP32 已準備播放！`);
         else alert('❌ ESP32 回應錯誤，狀態碼: ' + response.status);
+        if (response.ok) {
+            alert('✅ 樂譜傳送成功！ESP32 已接收並準備播放！');
+            document.getElementById('wifi-stop-btn').disabled = false; // 🌟 傳送成功後，解鎖專屬停止按鈕
+        }
     } catch (err) {
         alert('❌ 無法連線至 ESP32！\n請確認你的筆電是否與 ESP32 在同一個 Wi-Fi 網路下。\n錯誤細節: ' + err.message);
     } finally {
@@ -444,46 +504,26 @@ document.getElementById('wifi-btn').addEventListener('click', async () => {
     }
 });
 
-// ==========================================
-// 🌟 實體機台遙控 API 引擎
-// ==========================================
 async function controlHardwareMotor(state) {
     const ip = document.getElementById('esp-ip').value.trim();
     if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
-
     try {
         const response = await fetch(`http://${ip}/motor?state=${state}`);
-        if (response.ok) {
-            console.log(`📡 指令成功：實體馬達已${state === 'start' ? '啟動' : '停止'}`);
-        } else {
-            alert('❌ ESP32 回應錯誤，請確認機台是否開機且 IP 正確。');
-        }
-    } catch (err) {
-        alert('❌ 無法連線至 ESP32！\n錯誤細節: ' + err.message);
-    }
+        if (response.ok) console.log(`📡 指令成功：實體馬達已${state === 'start' ? '啟動' : '停止'}`);
+        else alert('❌ ESP32 回應錯誤，請確認機台是否開機且 IP 正確。');
+    } catch (err) { alert('❌ 無法連線至 ESP32！\n錯誤細節: ' + err.message); }
 }
 
-// 綁定遙控按鈕事件
 document.getElementById('motor-start-btn').addEventListener('click', () => controlHardwareMotor('start'));
 document.getElementById('motor-stop-btn').addEventListener('click', () => controlHardwareMotor('stop'));
 
-// ==========================================
-// 🌟 馬達 PWM 功率控制
-// ==========================================
 async function setMotorPower(value) {
     const ip = document.getElementById('esp-ip').value.trim();
-    if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
-
+    if (!ip) return;
     try {
         const response = await fetch(`http://${ip}/motor/power?value=${value}`);
-        if (response.ok) {
-            console.log(`📡 指令成功：馬達功率已設為 ${value}/255`);
-        } else {
-            alert('❌ ESP32 回應錯誤，請確認機台是否開機且 IP 正確。');
-        }
-    } catch (err) {
-        alert('❌ 無法連線至 ESP32！\n錯誤細節: ' + err.message);
-    }
+        if (response.ok) console.log(`📡 指令成功：馬達功率已設為 ${value}/255`);
+    } catch (err) { console.error('無法連線'); }
 }
 
 let motorPowerDebounceTimer = null;
@@ -491,14 +531,27 @@ const motorPowerSlider = document.getElementById('motor-power-slider');
 const motorPowerVal = document.getElementById('motor-power-val');
 
 motorPowerSlider.addEventListener('input', (e) => {
-    // 拖曳滑桿時即時更新畫面上的數字
     motorPowerVal.innerText = e.target.value;
-
-    // 防抖動：停止拖曳 150ms 後才真正送出請求，避免拖曳過程瘋狂打 API
     clearTimeout(motorPowerDebounceTimer);
-    motorPowerDebounceTimer = setTimeout(() => {
-        setMotorPower(e.target.value);
-    }, 150);
+    motorPowerDebounceTimer = setTimeout(() => { setMotorPower(e.target.value); }, 150);
+});
+
+
+document.getElementById('wifi-stop-btn').addEventListener('click', async () => {
+    const ip = document.getElementById('esp-ip').value.trim();
+    if (!ip) { alert('⚠️ 請先輸入 ESP32 的 IP 位址！'); return; }
+
+    try {
+        const response = await fetch(`http://${ip}/web_stop`);
+        if (response.ok) {
+            console.log('✅ 網頁數位播放已強制停止！');
+            document.getElementById('wifi-stop-btn').disabled = true; // 停播後把自己反灰
+        } else {
+            alert('❌ ESP32 回應錯誤，請確認機台連線。');
+        }
+    } catch (err) {
+        alert('❌ 無法連線至 ESP32！\n錯誤細節: ' + err.message);
+    }
 });
 
 </script>

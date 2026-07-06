@@ -20,10 +20,7 @@ WebServer server(80);
 #define I2S_BCLK 26  
 #define I2S_DOUT 22  
 
-// --- 步進馬達腳位 ---
 const int motorPins[4] = {13, 27, 14, 33};
-
-// --- LEDC PWM 通道設定 ---
 const int motorPWMChannels[4] = {4, 5, 6, 7}; 
 const int motorPWMFreq = 2500;   
 const int motorPWMResolution = 8; 
@@ -41,6 +38,7 @@ const int pin_SIG = 34;
 bool isWebPlaying = false;      
 bool isPhysicalPlaying = true;  
 bool isMotorRunning = false;     
+int playMode = 0; // 0: 實體模擬(15音), 1: 原始無損(4和弦)
 
 volatile bool motorShouldRun = false;
 volatile int motorDirection = -1; 
@@ -53,19 +51,19 @@ int currentStep = 0;
 unsigned long lastStepTime = 0;
 int stepDelayMs = 250; 
 
-int sensor_analog_values[8] = {0};
-unsigned long lastSerialPrintTime = 0; 
-
 int baseline_white[8] = {0}; 
 int baseline_black[8] = {0}; 
 int jump_up[8] = {0};   
 int jump_down[8] = {0}; 
 
 // ==========================================
-// 🎵 物理音訊引擎 (DSP Parameters)
+// 🎵 物理音訊引擎 (DSP LUT 查表法加速)
 // ==========================================
 #define SAMPLE_RATE 44100
 #define NUM_SAMPLES 512
+#define LUT_SIZE 1024 // 🌟 波形查表陣列大小
+
+float sineLUT[LUT_SIZE]; // 🌟 預先計算好的正弦波陣列
 
 const float defaultFreqs[15] = {
     261.63, 293.66, 329.63, 349.23, 392.00, 
@@ -73,16 +71,15 @@ const float defaultFreqs[15] = {
     698.46, 783.99, 880.00, 987.77, 1046.50
 };
 
-const char* noteNames[7] = {"Do (C4)", "Re (D4)", "Mi (E4)", "Fa (F4)", "Sol (G4)", "La (A4)", "Si (B4)"};
+// 🌟 將合成器擴充至 8 聲道 (8-Voice Polyphony)
+volatile float targetFreq[8] = {0};
+volatile float phase[8] = {0}; 
+volatile float amp[8] = {0};
+volatile float maxAmp[8] = {0};
+volatile bool attack[8] = {false};
+volatile bool releaseMode[8] = {false};
 
-volatile float targetFreq1 = 0.0, targetFreq2 = 0.0;
-volatile float phase1 = 0.0, phase2 = 0.0;
-volatile float amp1 = 0.0, amp2 = 0.0;
-volatile float maxAmp1 = 15000.0, maxAmp2 = 15000.0; 
-volatile bool attack1 = false, attack2 = false;
 
-
-// --- I2S 初始化 ---
 void initI2S() {
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
@@ -105,17 +102,28 @@ void initI2S() {
     i2s_set_clk(I2S_NUM_0, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
 }
 
+// 🌟 開機時預先算好波形，存入記憶體
+void initLUT() {
+    for(int i = 0; i < LUT_SIZE; i++) {
+        sineLUT[i] = sin((float)i * TWO_PI / LUT_SIZE);
+    }
+}
 
-// --- 獨立核心 1：物理音訊合成器 (含 Attack & Decay) ---
+// 🌟 獨立核心 1：極速 LUT 查表合成器 (搭載線性插值平滑技術)
+// 🌟 獨立核心 1：極速 LUT 查表合成器 (8 軌混音)
 void audioTask(void *pvParameters) {
     int16_t sampleBuffer[NUM_SAMPLES];
     size_t bytesWritten;
-    
     const float decayFactor = 0.9999; 
     const float attackStep = 500.0; 
 
     while (true) {
-        if (!isWebPlaying && !isPhysicalPlaying && amp1 < 1.0 && amp2 < 1.0 && !attack1 && !attack2) {
+        bool allQuiet = true;
+        for(int v=0; v<8; v++) { // 🌟 改為 8
+            if(amp[v] >= 1.0 || attack[v]) { allQuiet = false; break; }
+        }
+
+        if (!isWebPlaying && !isPhysicalPlaying && allQuiet) {
             memset(sampleBuffer, 0, sizeof(sampleBuffer));
             i2s_write(I2S_NUM_0, sampleBuffer, sizeof(sampleBuffer), &bytesWritten, portMAX_DELAY);
             vTaskDelay(10 / portTICK_PERIOD_MS); 
@@ -125,40 +133,35 @@ void audioTask(void *pvParameters) {
         for (int i = 0; i < NUM_SAMPLES; i++) {
             float sample = 0;
             
-            // 通道 1 處理 
-            if (attack1) {
-                amp1 += attackStep; 
-                if (amp1 >= maxAmp1) {  // 🌟 改變點：上限改為動態變數
-                    amp1 = maxAmp1;
-                    attack1 = false; 
+            for (int v = 0; v < 8; v++) { // 🌟 改為 8
+                if (releaseMode[v]) {
+                    amp[v] *= 0.85; 
+                    if (amp[v] <= 1.0) { amp[v] = 0.0; releaseMode[v] = false; }
+                } 
+                else if (attack[v]) {
+                    amp[v] += attackStep; 
+                    if (amp[v] >= maxAmp[v]) { amp[v] = maxAmp[v]; attack[v] = false; }
+                } 
+                else if (amp[v] > 1.0) {
+                    amp[v] *= decayFactor; 
                 }
-            } else if (amp1 > 1.0) {
-                amp1 *= decayFactor; 
-            }
 
-            if (amp1 > 1.0 || attack1) {
-                sample += sin(phase1) * amp1;
-                phase1 += (TWO_PI * targetFreq1) / SAMPLE_RATE;
-                if (phase1 >= TWO_PI) phase1 -= TWO_PI;
-            }
+                if (amp[v] > 1.0 || attack[v] || releaseMode[v]) {
+                    int index1 = (int)phase[v];
+                    int index2 = (index1 + 1) % LUT_SIZE;
+                    float fraction = phase[v] - index1;
+                    
+                    float interpolatedValue = sineLUT[index1] + fraction * (sineLUT[index2] - sineLUT[index1]);
+                    sample += interpolatedValue * amp[v];
 
-            // 通道 2 處理
-            if (attack2) {
-                amp2 += attackStep; 
-                if (amp2 >= maxAmp2) {  // 🌟 改變點：上限改為動態變數
-                    amp2 = maxAmp2;
-                    attack2 = false; 
+                    phase[v] += (targetFreq[v] * LUT_SIZE) / SAMPLE_RATE;
+                    if (phase[v] >= LUT_SIZE) phase[v] -= LUT_SIZE;
                 }
-            } else if (amp2 > 1.0) {
-                amp2 *= decayFactor; 
             }
-
-            if (amp2 > 1.0 || attack2) {
-                sample += sin(phase2) * amp2;
-                phase2 += (TWO_PI * targetFreq2) / SAMPLE_RATE;
-                if (phase2 >= TWO_PI) phase2 -= TWO_PI;
-            }
-
+            
+            if (sample > 32767.0) sample = 32767.0;
+            if (sample < -32768.0) sample = -32768.0;
+            
             sampleBuffer[i] = (int16_t)sample;
         }
         i2s_write(I2S_NUM_0, sampleBuffer, sizeof(sampleBuffer), &bytesWritten, portMAX_DELAY);
@@ -166,12 +169,11 @@ void audioTask(void *pvParameters) {
 }
 
 // ==========================================
-// ⚙️ 步進馬達 PWM 斬波驅動 
+// ⚙️ 步進馬達與硬體控制 
 // ==========================================
 static const uint8_t stepSequence[4][4] = {
     {1,0,1,0}, {0,1,1,0}, {0,1,0,1}, {1,0,0,1}
 };
-
 static int motorStepIndex = 0;
 
 void initMotorPWM() {
@@ -193,7 +195,6 @@ void motorCoilsOff() {
     for (int p = 0; p < 4; p++) ledcWrite(motorPWMChannels[p], 0);
 }
 
-// --- 獨立 Task：背景低功率驅動馬達 (Core 0) ---
 void motorTask(void *pvParameters) {
     while (true) {
         if (motorShouldRun) {
@@ -206,32 +207,92 @@ void motorTask(void *pvParameters) {
     }
 }
 
-// --- 查表法解碼器 ---
-void decodeState(int stateID) {
-    amp1 = 0.0; amp2 = 0.0; 
-    attack1 = false; attack2 = false;
-    delay(1); 
+void silenceAll() {
+    for(int v=0; v<8; v++) { 
+        attack[v] = false; 
+        if (amp[v] > 1.0) releaseMode[v] = true; 
+    }
+}
 
+/// 🌟 新增：動態頻率音量補償 (Frequency-Dependent EQ)
+float getVolumeCompensation(float freq) {
+    if (freq <= 0.1) return 0.0;
+    
+    // 將 sqrt 改為 0.8 次方，讓高低頻的落差更明顯
+    float comp = pow(440.0 / freq, 0.8); 
+    
+    // 放寬補償極限
+    if (comp > 1.8) comp = 1.8;   // 允許低音稍微再大聲一點
+    if (comp < 0.2) comp = 0.2;   // 🌟 允許高音被狠狠壓到只剩 20%
+    
+    return comp;
+}
+
+// 🌟 動態聲道分配引擎 (Voice Allocator)
+void playNote(float freq, float targetAmp) {
+    if (freq <= 0.1) return;
+
+    // 1. 同音重播 (Re-trigger)：消除連續音波波聲的關鍵！
+    // 如果這個頻率已經在響，不重置相位，直接推高音量。
+    for (int v = 0; v < 8; v++) {
+        if (abs(targetFreq[v] - freq) < 1.0) {
+            maxAmp[v] = targetAmp;
+            releaseMode[v] = false;
+            attack[v] = true;
+            return; 
+        }
+    }
+
+    // 2. 尋找閒置的空聲道
+    int voiceToUse = -1;
+    for (int v = 0; v < 8; v++) {
+        if (amp[v] <= 1.0 && !attack[v] && !releaseMode[v]) {
+            voiceToUse = v; break;
+        }
+    }
+
+    // 3. 尋找已經在快速衰減 (Release) 的聲道
+    if (voiceToUse == -1) {
+        for (int v = 0; v < 8; v++) {
+            if (releaseMode[v]) { voiceToUse = v; break; }
+        }
+    }
+
+    // 4. 強制搶奪目前最小聲的聲道
+    if (voiceToUse == -1) {
+        float minAmp = 999999.0;
+        for (int v = 0; v < 8; v++) {
+            if (amp[v] < minAmp) { minAmp = amp[v]; voiceToUse = v; }
+        }
+    }
+
+    // 觸發新音符
+    targetFreq[voiceToUse] = freq;
+    phase[voiceToUse] = 0; // 只有全新的音才重置相位
+    maxAmp[voiceToUse] = targetAmp;
+    amp[voiceToUse] = 0.0; // 從 0 完美淡入
+    releaseMode[voiceToUse] = false;
+    attack[voiceToUse] = true;
+}
+
+// 🌟 解碼器 1：實體模式 (移除強制靜音，保留天然共振)
+void decodePhysicalState(int stateID) {
     if (stateID == 0) return; 
     
+    float baseAmp = 18000.0; 
     if (stateID >= 1 && stateID <= 15) {
-        targetFreq1 = defaultFreqs[stateID - 1];
-        phase1 = 0; 
-        maxAmp1 = 28000.0; // 🌟 單音獨佔幾乎全部的數位位元深度 (Max 32767)
-        maxAmp2 = 0.0;
-        attack1 = true; 
+        float f = defaultFreqs[stateID - 1];
+        playNote(f, baseAmp * getVolumeCompensation(f));
     } 
     else if (stateID >= 16 && stateID <= 120) {
         int index = 16;
         for (int i = 0; i < 15; i++) {
             for (int j = i + 1; j < 15; j++) {
                 if (index == stateID) {
-                    targetFreq1 = defaultFreqs[i];
-                    targetFreq2 = defaultFreqs[j];
-                    phase1 = 0; phase2 = 0;
-                    maxAmp1 = 14000.0; // 🌟 雙音各分一半，總能量維持在 28000
-                    maxAmp2 = 14000.0;
-                    attack1 = true; attack2 = true;
+                    float f1 = defaultFreqs[i];
+                    float f2 = defaultFreqs[j];
+                    playNote(f1, (baseAmp / 2.0) * getVolumeCompensation(f1));
+                    playNote(f2, (baseAmp / 2.0) * getVolumeCompensation(f2));
                     return;
                 }
                 index++;
@@ -240,123 +301,80 @@ void decodeState(int stateID) {
     }
 }
 
-// ==========================================
-// 🔍 開機白紙與黑線全自動雙點校正 (過黑線白紙緩衝版)
-// ==========================================
-void calibrateSensors() {
-    Serial.println("\n⚙️ [階段 1] 測量白紙基準值...");
-    long temp_sum[8] = {0};
-    int samples = 50; 
+// 🌟 解碼器 2：原始無損模式
+void decodeOriginalState(int n1, int n2, int n3, int n4) {
+    int notes[4] = {n1, n2, n3, n4};
+    int activeCount = 0;
+    for(int i=0; i<4; i++) { if(notes[i] > 0) activeCount++; }
+    if (activeCount == 0) return;
 
+    float allocatedAmp = 20000.0 / activeCount;
+    for(int i=0; i<4; i++) {
+        if (notes[i] > 0) {
+            float f = 440.0 * pow(2.0, (notes[i] - 69) / 12.0);
+            playNote(f, allocatedAmp * getVolumeCompensation(f));
+        }
+    }
+}
+
+void calibrateSensors() {
+    Serial.println("\n⚙️ [階段 1] 測量白紙...");
+    long temp_sum[8] = {0}; int samples = 50; 
     for (int s = 0; s < samples; s++) {
         for (int i = 0; i < 8; i++) {
-            digitalWrite(pin_S0, bitRead(i, 0));
-            digitalWrite(pin_S1, bitRead(i, 1));
-            digitalWrite(pin_S2, bitRead(i, 2));
-            digitalWrite(pin_S3, bitRead(i, 3));
-            delayMicroseconds(5); 
-            analogRead(pin_SIG); 
-            temp_sum[i] += analogRead(pin_SIG); 
+            digitalWrite(pin_S0, bitRead(i, 0)); digitalWrite(pin_S1, bitRead(i, 1));
+            digitalWrite(pin_S2, bitRead(i, 2)); digitalWrite(pin_S3, bitRead(i, 3));
+            delayMicroseconds(5); temp_sum[i] += analogRead(pin_SIG); 
         }
         delay(5);
     }
-    for (int i = 0; i < 8; i++) {
-        baseline_white[i] = temp_sum[i] / samples;
-        baseline_black[i] = baseline_white[i]; 
-    }
+    for (int i = 0; i < 8; i++) { baseline_white[i] = temp_sum[i] / samples; baseline_black[i] = baseline_white[i]; }
 
-    Serial.println("⚙️ [階段 2] 尋找校正黑線... 馬達啟動動態掃描！");
-    
-    bool blackLineDetected = false; 
-    bool blackLinePassed = false;   
-    int bufferSteps = 0;
-    const int bufferLimit = 40;     
-    const int maxSearchSteps = 1500; 
-    int step_count = 0;
+    Serial.println("⚙️ [階段 2] 尋找校正黑線...");
+    bool blackLineDetected = false, blackLinePassed = false;   
+    int bufferSteps = 0, step_count = 0;
 
-    // 校正階段手動推進馬達，不觸發 motorShouldRun
-    while (step_count < maxSearchSteps) {
-        stepOnce(motorDirection, motorPWMDuty);
-        delay(motorStepIntervalMs);
-        step_count++;
-        
+    while (step_count < 1500) {
+        stepOnce(motorDirection, motorPWMDuty); delay(motorStepIntervalMs); step_count++;
         bool currentStepHitBlack = false;
-
         for (int i = 0; i < 8; i++) {
-            digitalWrite(pin_S0, bitRead(i, 0));
-            digitalWrite(pin_S1, bitRead(i, 1));
-            digitalWrite(pin_S2, bitRead(i, 2));
-            digitalWrite(pin_S3, bitRead(i, 3));
+            digitalWrite(pin_S0, bitRead(i, 0)); digitalWrite(pin_S1, bitRead(i, 1));
+            digitalWrite(pin_S2, bitRead(i, 2)); digitalWrite(pin_S3, bitRead(i, 3));
             delayMicroseconds(5); 
-            
             int val = analogRead(pin_SIG);
-            if (val > baseline_black[i]) {
-                baseline_black[i] = val; 
-            }
-            if (val > (baseline_white[i] + 400)) {
-                currentStepHitBlack = true;
-            }
+            if (val > baseline_black[i]) baseline_black[i] = val; 
+            if (val > (baseline_white[i] + 400)) currentStepHitBlack = true;
         }
-
-        if (!blackLineDetected && currentStepHitBlack) {
-            blackLineDetected = true;
-            Serial.println("👀 發現黑線邊緣！持續推進直到完全跨過黑線...");
-        }
-
-        if (blackLineDetected && !currentStepHitBlack) {
-            if (!blackLinePassed) {
-                blackLinePassed = true;
-                Serial.println("⚪ 已完全跨過黑線進入白紙區！開始推進起始緩衝距離...");
-            }
-        }
-
+        if (!blackLineDetected && currentStepHitBlack) blackLineDetected = true;
+        if (blackLineDetected && !currentStepHitBlack) { if (!blackLinePassed) blackLinePassed = true; }
         if (blackLinePassed) {
             bufferSteps++;
-            if (bufferSteps >= bufferLimit) {
-                Serial.println("🛑 已完美停在黑線後方的白紙起始區，停止掃描。");
-                break; 
-            }
+            if (bufferSteps >= 40) break; 
         }
     }
+    motorCoilsOff(); 
 
-    if (!blackLineDetected) {
-        Serial.println("⚠️ 警告：超過最大搜尋範圍仍未發現黑線！請確認紙帶是否有放好。");
-    }
-
-    motorCoilsOff(); // 掃描完畢斷電省電
-
-    Serial.println("✅ 校正完成！各通道動態參數如下：");
+    Serial.println("✅ 校正完成！參數：");
     for (int i = 0; i < 8; i++) {
         int delta = baseline_black[i] - baseline_white[i];
         if (delta < 200) delta = 500;
-        jump_up[i] = delta * 0.6;   
-        jump_down[i] = delta * 0.4; 
-        
-        Serial.printf("通道[%d] 白:%4d | 黑:%4d | 觸發區間: +%d ~ +%d\n", 
-                      i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
-        delay(5); // 🌟 避免 UART 緩衝區溢位導致破圖
+        jump_up[i] = delta * 0.6; jump_down[i] = delta * 0.4; 
+        Serial.printf("通道[%d] 白:%4d | 黑:%4d | +%d~+%d\n", i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
+        delay(5); 
     }
-    Serial.println("\n🎶 進入讀譜待命模式！(等待網頁啟動指令...)");
+    Serial.println("\n🎶 進入讀譜待命模式！");
 }
 
-// ==========================================
-// 🚀 系統初始化 (Setup)
-// ==========================================
 void setup() {
-    Serial.begin(115200);
-    delay(1000);
+    Serial.begin(115200); delay(1000);
 
-    initMotorPWM(); 
-    motorCoilsOff(); // 開機先確保馬達斷電
+    initMotorPWM(); motorCoilsOff(); 
+    initLUT(); // 🌟 啟動時立刻把查表陣列準備好
 
-    pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT);
-    pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
-    pinMode(pin_SIG, INPUT);
-    pinMode(0, INPUT_PULLUP);              
-    pinMode(START_BTN_PIN, INPUT_PULLUP); 
+    pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT); pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
+    pinMode(pin_SIG, INPUT); pinMode(0, INPUT_PULLUP); pinMode(START_BTN_PIN, INPUT_PULLUP); 
 
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
+    WiFi.mode(WIFI_STA); WiFi.begin(ssid, password);
     Serial.print("\n連線 Wi-Fi 中...");
     while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
     Serial.printf("\n✅ 連線成功！IP: %s\n", WiFi.localIP().toString().c_str());
@@ -371,174 +389,136 @@ void setup() {
     server.on("/upload", HTTP_POST, []() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         String jsonPayload = server.arg("plain");
-        DynamicJsonDocument doc(32768); 
+        DynamicJsonDocument doc(65536); 
         if (deserializeJson(doc, jsonPayload)) { server.send(400, "text/plain", "JSON 失敗"); return; }
 
+        playMode = doc["mode"] | 0; 
         stepDelayMs = doc["delay_ms"] | 250; 
         JsonArray score = doc["score"];
         currentScore.clear();
         for (int value : score) currentScore.push_back(value);
 
-        Serial.printf("\n📡 [網頁] 樂譜載入完畢！切換至數位模式。\n");
+        Serial.printf("\n📡 樂譜載入完畢！目前模式: %s\n", playMode == 0 ? "實體 15音" : "無損 4和弦");
         server.send(200, "text/plain", "樂譜接收成功！");
 
-        isPhysicalPlaying = false; 
-        isMotorRunning = false; 
-        isWebPlaying = true;
-        currentStep = 0;
-        lastStepTime = millis();
+        isPhysicalPlaying = false; isMotorRunning = false; isWebPlaying = true;
+        currentStep = 0; lastStepTime = millis();
     });
 
+    // 1. 恢復純粹的馬達控制路由
     server.on("/motor", HTTP_GET, []() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         String state = server.arg("state");
-        if (state == "start") {
-            isMotorRunning = true;
-            Serial.println("🌐 [網頁遙控] 馬達已啟動！");
-        } else if (state == "stop") {
-            isMotorRunning = false;
-            amp1 = 0.0; amp2 = 0.0; attack1 = false; attack2 = false;
-            Serial.println("🌐 [網頁遙控] 馬達已停止！");
+        if (state == "start") { 
+            isMotorRunning = true; 
+            Serial.println("🌐 [網頁遙控] 馬達已啟動！"); 
+        } 
+        else if (state == "stop") { 
+            isMotorRunning = false; 
+            if (isPhysicalPlaying) silenceAll(); // 只有實體模式下才順便靜音
+            Serial.println("🌐 [網頁遙控] 馬達已停止！"); 
         }
+        server.send(200, "text/plain", "OK");
+    });
+
+    // 🌟 新增：專屬的網頁音樂強制停止路由
+    server.on("/web_stop", HTTP_GET, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        isWebPlaying = false;      // 強制結束 Wi-Fi 播放狀態
+        isPhysicalPlaying = true;  // 系統回歸實體紙帶待命模式
+        silenceAll();              // 瞬間執行 8 聲道平滑靜音
+        Serial.println("🌐 [網頁遙控] 網頁數位播放已強制停止！"); 
+        server.send(200, "text/plain", "OK");
+    });
+
+    // 2. 🌟 新增：專屬的網頁音樂強制停止路由
+    server.on("/web_stop", HTTP_GET, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        isWebPlaying = false;      
+        isPhysicalPlaying = true;  
+        silenceAll();              
+        Serial.println("🌐 [網頁遙控] 網頁數位播放已強制停止！"); 
         server.send(200, "text/plain", "OK");
     });
 
     server.on("/motor/power", HTTP_GET, []() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         if (server.hasArg("value")) {
-            int v = server.arg("value").toInt();
-            v = constrain(v, 0, 255);
-            motorPWMDuty = v;
-            Serial.printf("🌐 [網頁遙控] 馬達功率調整為 %d/255\n", v);
+            motorPWMDuty = constrain(server.arg("value").toInt(), 0, 255);
             server.send(200, "text/plain", "OK");
-        } else {
-            server.send(400, "text/plain", "缺少 value 參數");
-        }
+        } else server.send(400, "text/plain", "缺少 value");
     });
 
     server.begin(); 
-
     initI2S();
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);
     xTaskCreatePinnedToCore(motorTask, "MotorTask", 2048, NULL, 1, NULL, 0);
 
-    // 🌟 進入等待迴圈前，強制清空 Serial 緩衝區裡的開機雜訊
     while (Serial.available()) { Serial.read(); }
-
     Serial.println("\n⏸️ 系統已就緒，請選擇運作模式：");
-    Serial.println("👉 實機模式：放入紙帶後，按 BOOT 鍵或【啟動按鈕】進行校正。");
-    Serial.println("👉 開發模式：於此視窗輸入字母 's' 並按 Enter 以手動進入實體校正。");
-    Serial.println("👉 數位模式：直接用網頁控制台發送樂譜 (將自動略過實機校正)。");
-
     bool skipCalibration = false;
     while (true) {
         server.handleClient(); 
-
-        if (isWebPlaying) {
-            skipCalibration = true; 
-            break;
-        }
-
+        if (isWebPlaying) { skipCalibration = true; break; }
         if (Serial.available()) {
             char c = Serial.read();
-            if (c == 's' || c == 'S') {
-                while(Serial.available()) Serial.read(); 
-                break; 
-            }
+            if (c == 's' || c == 'S') { while(Serial.available()) Serial.read(); break; }
         }
-        
-        // 🌟 強化的硬體脈衝過濾器 (Debounce 200ms)
         /*if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) {
             delay(200); 
             if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) { 
-                while(digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW); 
-                break; 
+                while(digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW); break; 
             }
         }*/
         delay(10); 
     }
-
-    if (!skipCalibration) {
-        calibrateSensors(); 
-    }
+    if (!skipCalibration) calibrateSensors(); 
 }
 
-// ==========================================
-// 🔄 主迴圈
-// ==========================================
 void loop() {
     server.handleClient(); 
-
-    // ⭐ 統一在這裡把「該不該轉」的邏輯，同步給 motorTask
-    // (motorTask 內部會自行判斷，不轉時自動呼叫 motorCoilsOff() 斷電)
-    motorShouldRun = isWebPlaying || (isPhysicalPlaying && isMotorRunning);
+    motorShouldRun = (isPhysicalPlaying && isMotorRunning);
 
     if (isWebPlaying) {
-        if (millis() - lastStepTime >= (stepDelayMs * 0.85)) {
-            amp1 = 0.0; amp2 = 0.0; attack1 = false; attack2 = false;
-        }
+        if (millis() - lastStepTime >= (stepDelayMs * 0.85)) silenceAll();
 
         if (millis() - lastStepTime >= stepDelayMs) {
             lastStepTime = millis(); 
-            if (currentStep < currentScore.size()) {
-                decodeState(currentScore[currentStep]);
-                currentStep++;
+            
+            if (playMode == 0) {
+                if (currentStep < currentScore.size()) {
+                    decodePhysicalState(currentScore[currentStep]);
+                    currentStep++;
+                } else {
+                    isWebPlaying = false; isPhysicalPlaying = true; silenceAll();
+                    Serial.println("⏹️ 播放結束。");
+                }
             } else {
-                isWebPlaying = false;
-                isPhysicalPlaying = true;
-                amp1 = 0.0; amp2 = 0.0; attack1 = false; attack2 = false;
-                Serial.println("⏹️ [網頁] 播放結束，自動回歸實體測試待命模式。");
+                if (currentStep * 4 < currentScore.size()) {
+                    decodeOriginalState(currentScore[currentStep*4], currentScore[currentStep*4+1], currentScore[currentStep*4+2], currentScore[currentStep*4+3]);
+                    currentStep++;
+                } else {
+                    isWebPlaying = false; isPhysicalPlaying = true; silenceAll();
+                    Serial.println("⏹️ 播放結束。");
+                }
             }
         }
     }
-    else if (isPhysicalPlaying) {
-        if (isMotorRunning) {
-            int current_binary_val = 0;
+    else if (isPhysicalPlaying && isMotorRunning) {
+        int current_binary_val = 0;
+        for (int i = 0; i < 8; i++) {
+            digitalWrite(pin_S0, bitRead(i, 0)); digitalWrite(pin_S1, bitRead(i, 1));
+            digitalWrite(pin_S2, bitRead(i, 2)); digitalWrite(pin_S3, bitRead(i, 3));
+            delayMicroseconds(5); 
+            int val = analogRead(pin_SIG); val = analogRead(pin_SIG); 
+            if (val > (baseline_white[i] + jump_up[i])) current_sensor_state[i] = true;
+            else if (val < (baseline_white[i] + jump_down[i])) current_sensor_state[i] = false;
+            if (current_sensor_state[i] && i < 7) current_binary_val += (1 << i); 
+        }
 
-            for (int i = 0; i < 8; i++) {
-                digitalWrite(pin_S0, bitRead(i, 0));
-                digitalWrite(pin_S1, bitRead(i, 1));
-                digitalWrite(pin_S2, bitRead(i, 2));
-                digitalWrite(pin_S3, bitRead(i, 3));
-                delayMicroseconds(5); 
-                
-                int val = analogRead(pin_SIG);
-                val = analogRead(pin_SIG); 
-                
-                if (val > (baseline_white[i] + jump_up[i])) {
-                    current_sensor_state[i] = true;
-                } 
-                else if (val < (baseline_white[i] + jump_down[i])) {
-                    current_sensor_state[i] = false;
-                }
-
-                if (current_sensor_state[i] && i < 7) {
-                    current_binary_val += (1 << i); 
-                }
-            }
-
-            if (current_sensor_state[7] && !last_sensor_state[7]) {
-                if (current_binary_val > 0) {
-                    Serial.printf("⏱️ [時脈觸發] 讀取到狀態碼: %d\n", current_binary_val);
-                    decodeState(current_binary_val);
-                }
-            } 
-            else if (!current_sensor_state[7] && last_sensor_state[7]) {
-                //amp1 = 0.0; amp2 = 0.0; attack1 = false; attack2 = false;
-            }
-
-            for (int i = 0; i < 8; i++) {
-                last_sensor_state[i] = current_sensor_state[i];
-            }
-
-            // 註解或取消註解以下段落以控制是否頻繁印出感測器數值
-            /*
-            Serial.print("感測值: ");
-            for (int i = 0; i < 8; i++) {
-                Serial.printf("[%d]:%4d  ", i, current_sensor_state[i]);
-            }
-            Serial.println(); 
-            */
+        if (current_sensor_state[7] && !last_sensor_state[7]) {
+            if (current_binary_val > 0) decodePhysicalState(current_binary_val); 
         } 
+        for (int i = 0; i < 8; i++) last_sensor_state[i] = current_sensor_state[i];
     }
 }
