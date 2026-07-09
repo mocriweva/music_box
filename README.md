@@ -1,56 +1,58 @@
-# 🎛️ 8-Bit 實體電子音樂盒全端整合系統 (Physical Music Box Studio)
+# 🎹 ESP32 Optical & Wi-Fi Dual-Mode Music Box
 
-這是一個結合數位訊號處理 (DSP)、前端網頁渲染與微控制器 (MCU) 韌體的機電整合專題。本專案將傳統的實體紙帶音樂盒全面數位化，透過自行開發的網頁編譯器，將標準 MIDI 樂譜降維壓縮成「7 軌數據 + 1 軌時脈」的實體二進位紙帶，並由 ESP32 搭配紅外線感測器陣列進行讀取與 I2S 高傳真音訊解碼。
+This is a dual-mode electronic music box project that combines physical punched paper tapes with digital Wi-Fi transmission. Powered by an ESP32 microcontroller, this project uses infrared sensors to read physical paper tapes and features a built-in 8-voice polyphony I2S hardware synthesizer. It perfectly recreates the mechanical romance of a traditional music box while offering the convenience of modern IoT.
 
-## ⚙️ 系統硬體架構 (Hardware Specifications)
+## ✨ Features
 
-本系統將硬體模組化為四大核心：
+*   **🔀 Dual-Mode Playback**
+    *   **Physical Optical Mode**: Uses a stepper motor to drive the punched paper tape and reads notes in real-time via an 8-channel infrared sensor array and a MUX (CD74HC4067).
+    *   **Digital Wi-Fi Mode**: Upload MIDI files via a dedicated web console, translate them into JSON, and transmit them wirelessly over Wi-Fi to the ESP32 for direct playback.
+*   **🎵 Advanced Audio Engine (DSP)**
+    *   **8-Voice Polyphony**: Supports complex chords and natural sustain stacking, completely breaking free from monophonic limitations.
+    *   **Dynamic EQ**: Automatically attenuates high frequencies and boosts low frequencies based on the Fletcher-Munson equal-loudness contours, overcoming the physical limitations of small bare speakers.
+    *   **Linear Interpolation & ADSR Release**: Eliminates truncation errors from LUT (Look-Up Table) synthesis and the click/pop noises caused by sudden power cuts, ensuring ultra-pure sound quality.
+*   **🤖 Smart Auto-Calibration System**
+    *   Built-in "White Paper -> Black Line -> White Paper" tracking algorithm and dual dummy-read filtering mechanism. It automatically captures the infrared trigger thresholds for each channel and includes a "lazy calibration" safety net.
+*   **🌐 Web Console**
+    *   Supports MIDI parsing and Tone.js dual-mode sound preview (paper tape constraint simulation / lossless playback), providing completely independent remote control for both the motor and the music.
 
-* **主控大腦 (Core)**：NodeMCU-32S (ESP32) 雙核心微控制器。
-* **光學感官 (Input)**：8 顆 TCRT5000 紅外線循跡感測器陣列，搭配 CD74HC4051 類比多工器 (Multiplexer) 解決 I/O 腳位限制。
-* **動力傳輸 (Motion)**：28BYJ-48 步進馬達，摒棄直流馬達以確保物理節拍的絕對穩定性。
-* **數位發聲 (Audio)**：MAX98357A I2S 音訊擴大機模組，輸出乾淨無雜訊的正弦波合成音。
-* **電源拓樸 (Power)**：星形單一供電架構，配合 470uF 電容群穩定馬達與音訊的突波電流。
+## 🛠️ Hardware
 
-## 💻 軟體生態系 (Software Stack)
+*   **Microcontroller**: ESP32
+*   **Audio Output**: I2S DAC Decoder Board + Small Speaker
+*   **Sensor Module**: Infrared Reflective Sensor Array (8 Channels)
+*   **Multiplexer**: CD74HC4067 (Solves the shortage of ESP32 analog pins)
+*   **Drive Mechanism**: Stepper Motor + Stepper Motor Driver Board (For rolling the paper tape)
 
-專案包含兩個核心軟體工具，涵蓋從純文字到實體列印的完整資料流：
+## 🚀 Getting Started
 
-1.  **`haruhikage_full.py` (字串編譯引擎)**
-    * 利用正規表示式 (Regex) 解析自創的文字簡譜語法。
-    * 支援升降記號、八度偏移與動態節拍運算。
-    * 直接輸出標準 `.mid` 檔案，解決複雜樂譜手動建檔的痛點。
-2.  **`miditransform.html` (網頁數位孿生編譯器)**
-    * 純前端 Client-side 應用，無須後端伺服器即可執行。
-    * 整合 `Tone.js` 虛擬合成器與 `<canvas>` 視覺化掃描線，實現「所見即所聽」。
-    * 內建 `jsPDF` 向量輸出引擎，支援無限長度紙帶自動 A4 分頁。
+### 1. Flash Firmware
+1. Open the `.ino` project file in the Arduino IDE.
+2. Ensure the necessary Wi-Fi and WebServer libraries are installed and included.
+3. Modify `ssid` and `password` in the code to match your local Wi-Fi credentials.
+4. Compile and flash to the ESP32.
 
-## 🧠 核心演算法亮點 (Algorithmic Highlights)
+### 2. Web Console Setup
+1. Open the Serial Monitor in the Arduino IDE to get the device's IP address after connecting.
+2. Open `index.html` (the web console) in your computer or mobile browser.
+3. Enter the obtained IP address into the "ESP32 IP Address" field on the left-center of the page.
 
-* **動態滑動視窗音域偵測 (Sliding Window Detection)**
-    * 系統自動掃描 88 鍵 MIDI 矩陣，尋找包含最多音符的連續 15 鍵區間，動態設定實體硬體的帶通濾波範圍，免除人工調音域的繁瑣。
-* **多軌分離與高頻特徵萃取 (High-Note Extraction)**
-    * 內建音軌選擇器排除爵士鼓等干擾。當同一拍出現超過兩個音符時，系統會自動降冪排序並「暴力裁切」保留頻率最高的兩個音，確保主旋律存活。
-* **121 狀態查表壓縮法 (7-Bit LUT Encoding)**
-    * 傳統 15 音需要 15 個感測器。本系統利用組合數學 $\binom{15}{2} + 15 + 1 = 121 \leq 128 (2^7)$ 的特性，將 15 個實體音符的雙音組合完美壓縮進 7 條資料軌，加上 1 條同步時脈軌 (Clock)，將硬體體積縮減 50% 以上。
+### 3. Operation Guide
+*   **Physical Paper Tape Playback**:
+    1. Insert the punched paper tape into the sensor reading slot.
+    2. Click the "▶️ Start Physical Motor" button on the webpage or enter `S` in the Serial Monitor.
+    3. The machine will automatically perform infrared calibration and begin rolling and playing once completed.
+*   **Wi-Fi Digital Playback**:
+    1. Select and upload the `.mid` file you want to play at the top of the webpage.
+    2. Click "📶 Send JSON Score Wirelessly".
+    3. Upon successful reception, the ESP32 will automatically skip physical calibration and play the music directly.
+*   **Independent Stop System**:
+    The webpage provides independent "⏹️ Stop Wireless Playback" and "⏹️ Stop Physical Motor" buttons. Their states are completely decoupled and will not interfere with each other.
 
-## 🚀 快速上手指南 (Quick Start)
+## 🔮 Future Work
 
-### 階段一：自訂樂譜轉換 (選用)
-若要將手寫簡譜轉換為 MIDI，請確認已安裝 Python 3 與 `mido` 套件：
-```powershell
-pip install mido
-py haruhikage_full.py
-```
-執行後將於目錄下產出目標 `.mid` 檔案。
+*   Create a laser-cut wooden or 3D-printed enclosure to add a resonance box for further low-frequency sound improvement.
+*   Develop an automatic punch machine to directly convert exported scores from the web console into physical punched paper tapes.
 
-### 階段二：實體紙帶編譯與輸出
-1.  **啟動環境**：因採用純前端架構，可直接雙擊 `index.html` 開啟，或透過 VS Code 的 Live Server 啟動。
-2.  **匯入檔案**：將 MIDI 檔案拖曳至網頁上傳區。
-3.  **選擇音軌**：從下拉選單指定要印出的主旋律音軌。
-4.  **參數校正**：
-    * 設定 **X軸孔距** 控制歌曲播放總長度與密度。
-    * 設定 **Y軸軌距** 嚴格對齊 TCRT5000 實體電路板的間隔距離 (mm)。
-    * 調整 **每行最大網格數** 避免 Canvas 渲染溢位。
-5.  **虛擬試聽**：按下「預覽實體聲音」，紅色掃描線將模擬硬體讀取並同步發出合成音效。
-6.  **匯出實體**：點擊「匯出 A4 分頁紙帶」，系統將產生精準物理尺寸的向量 PDF，使用 A4 印表機「實際大小 (100%)」列印後拼接即可上機測試。
+## 📝 License
+[MIT License](LICENSE)
