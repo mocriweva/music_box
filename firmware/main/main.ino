@@ -45,6 +45,7 @@ volatile int motorDirection = -1;
 
 bool current_sensor_state[8] = {false};
 bool last_sensor_state[8] = {false}; 
+bool isCalibrated = false;
 
 std::vector<int> currentScore;
 int currentStep = 0;
@@ -275,6 +276,12 @@ void playNote(float freq, float targetAmp) {
     attack[voiceToUse] = true;
 }
 
+const char* noteNames[15] = {
+    "Do (C4)", "Re (D4)", "Mi (E4)", "Fa (F4)", "Sol (G4)", 
+    "La (A4)", "Si (B4)", "Do (C5)", "Re (D5)", "Mi (E5)", 
+    "Fa (F5)", "Sol (G5)", "La (A5)", "Si (B5)", "Do (C6)"
+};
+
 // 🌟 解碼器 1：實體模式 (移除強制靜音，保留天然共振)
 void decodePhysicalState(int stateID) {
     if (stateID == 0) return; 
@@ -283,6 +290,7 @@ void decodePhysicalState(int stateID) {
     if (stateID >= 1 && stateID <= 15) {
         float f = defaultFreqs[stateID - 1];
         playNote(f, baseAmp * getVolumeCompensation(f));
+        Serial.printf("🎵 掃描到單音: ID %d -> %s\n", stateID, noteNames[stateID - 1]);
     } 
     else if (stateID >= 16 && stateID <= 120) {
         int index = 16;
@@ -293,6 +301,7 @@ void decodePhysicalState(int stateID) {
                     float f2 = defaultFreqs[j];
                     playNote(f1, (baseAmp / 2.0) * getVolumeCompensation(f1));
                     playNote(f2, (baseAmp / 2.0) * getVolumeCompensation(f2));
+                    Serial.printf("🎶 掃描到和弦: ID %d -> %s + %s\n", stateID, noteNames[i], noteNames[j]);
                     return;
                 }
                 index++;
@@ -318,51 +327,110 @@ void decodeOriginalState(int n1, int n2, int n3, int n4) {
 }
 
 void calibrateSensors() {
-    Serial.println("\n⚙️ [階段 1] 測量白紙...");
-    long temp_sum[8] = {0}; int samples = 50; 
+    // 🌟 暫時接管馬達，避免與背景的 motorTask 發生衝突
+    bool prevMotorState = motorShouldRun;
+    motorShouldRun = false; 
+    delay(30); 
+
+    Serial.println("\n⚙️ [階段 1] 測量白紙基準值...");
+    long temp_sum[8] = {0};
+    int samples = 50; 
+
     for (int s = 0; s < samples; s++) {
         for (int i = 0; i < 8; i++) {
-            digitalWrite(pin_S0, bitRead(i, 0)); digitalWrite(pin_S1, bitRead(i, 1));
-            digitalWrite(pin_S2, bitRead(i, 2)); digitalWrite(pin_S3, bitRead(i, 3));
-            delayMicroseconds(5); temp_sum[i] += analogRead(pin_SIG); 
+            digitalWrite(pin_S0, bitRead(i, 0));
+            digitalWrite(pin_S1, bitRead(i, 1));
+            digitalWrite(pin_S2, bitRead(i, 2));
+            digitalWrite(pin_S3, bitRead(i, 3));
+            delayMicroseconds(5); 
+            analogRead(pin_SIG); // 🌟 恢復你的神來一筆：空讀消除 MUX 殘影！
+            temp_sum[i] += analogRead(pin_SIG); 
         }
         delay(5);
     }
-    for (int i = 0; i < 8; i++) { baseline_white[i] = temp_sum[i] / samples; baseline_black[i] = baseline_white[i]; }
+    for (int i = 0; i < 8; i++) {
+        baseline_white[i] = temp_sum[i] / samples;
+        baseline_black[i] = baseline_white[i]; 
+    }
 
-    Serial.println("⚙️ [階段 2] 尋找校正黑線...");
-    bool blackLineDetected = false, blackLinePassed = false;   
-    int bufferSteps = 0, step_count = 0;
+    Serial.println("⚙️ [階段 2] 尋找校正黑線... 馬達啟動動態掃描！");
+    
+    bool blackLineDetected = false; 
+    bool blackLinePassed = false;   
+    int bufferSteps = 0;
+    const int bufferLimit = 40;     
+    const int maxSearchSteps = 3000; 
+    int step_count = 0;
 
-    while (step_count < 1500) {
-        stepOnce(motorDirection, motorPWMDuty); delay(motorStepIntervalMs); step_count++;
+    // 校正階段手動推進馬達
+    while (step_count < maxSearchSteps) {
+        stepOnce(motorDirection, motorPWMDuty);
+        delay(motorStepIntervalMs);
+        step_count++;
+        
         bool currentStepHitBlack = false;
+
         for (int i = 0; i < 8; i++) {
-            digitalWrite(pin_S0, bitRead(i, 0)); digitalWrite(pin_S1, bitRead(i, 1));
-            digitalWrite(pin_S2, bitRead(i, 2)); digitalWrite(pin_S3, bitRead(i, 3));
+            digitalWrite(pin_S0, bitRead(i, 0));
+            digitalWrite(pin_S1, bitRead(i, 1));
+            digitalWrite(pin_S2, bitRead(i, 2));
+            digitalWrite(pin_S3, bitRead(i, 3));
             delayMicroseconds(5); 
+            
+            analogRead(pin_SIG); // 🌟 掃描階段同樣恢復空讀機制！
             int val = analogRead(pin_SIG);
-            if (val > baseline_black[i]) baseline_black[i] = val; 
-            if (val > (baseline_white[i] + 400)) currentStepHitBlack = true;
+            
+            if (val > baseline_black[i]) {
+                baseline_black[i] = val; 
+            }
+            if (val > (baseline_white[i] + 800)) {
+                currentStepHitBlack = true;
+            }
         }
-        if (!blackLineDetected && currentStepHitBlack) blackLineDetected = true;
-        if (blackLineDetected && !currentStepHitBlack) { if (!blackLinePassed) blackLinePassed = true; }
+
+        if (!blackLineDetected && currentStepHitBlack) {
+            blackLineDetected = true;
+            Serial.println("👀 發現黑線邊緣！持續推進直到完全跨過黑線...");
+        }
+
+        if (blackLineDetected && !currentStepHitBlack) {
+            if (!blackLinePassed) {
+                blackLinePassed = true;
+                Serial.println("⚪ 已完全跨過黑線進入白紙區！開始推進起始緩衝距離...");
+            }
+        }
+
         if (blackLinePassed) {
             bufferSteps++;
-            if (bufferSteps >= 40) break; 
+            if (bufferSteps >= bufferLimit) {
+                Serial.println("🛑 已完美停在黑線後方的白紙起始區，停止掃描。");
+                break; 
+            }
         }
     }
-    motorCoilsOff(); 
 
-    Serial.println("✅ 校正完成！參數：");
+    if (!blackLineDetected) {
+        Serial.println("⚠️ 警告：超過最大搜尋範圍仍未發現黑線！請確認紙帶是否有放好。");
+    }
+
+    motorCoilsOff(); // 掃描完畢斷電省電
+
+    Serial.println("✅ 校正完成！各通道動態參數如下：");
     for (int i = 0; i < 8; i++) {
         int delta = baseline_black[i] - baseline_white[i];
         if (delta < 200) delta = 500;
-        jump_up[i] = delta * 0.6; jump_down[i] = delta * 0.4; 
-        Serial.printf("通道[%d] 白:%4d | 黑:%4d | +%d~+%d\n", i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
+        jump_up[i] = delta * 0.6;   
+        jump_down[i] = delta * 0.4; 
+        
+        Serial.printf("通道[%d] 白:%4d | 黑:%4d | 觸發區間: +%d ~ +%d\n", 
+                      i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
         delay(5); 
     }
-    Serial.println("\n🎶 進入讀譜待命模式！");
+    Serial.println("\n🎶 進入讀譜待命模式！(等待網頁啟動指令...)");
+
+    // 🌟 保留上一版的補測紀錄與馬達歸還機制
+    isCalibrated = true;             
+    motorShouldRun = prevMotorState; 
 }
 
 void setup() {
@@ -454,26 +522,40 @@ void setup() {
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);
     xTaskCreatePinnedToCore(motorTask, "MotorTask", 2048, NULL, 1, NULL, 0);
 
-    while (Serial.available()) { Serial.read(); }
-    Serial.println("\n⏸️ 系統已就緒，請選擇運作模式：");
+    while (Serial.available()) { Serial.read(); } 
+    
+    Serial.println("\n=======================================");
+    Serial.println("⏸️ 系統已就緒！等待指令中...");
+    Serial.println("=======================================");
+    Serial.println("👉 [網頁播放] 點擊網頁「無線傳送樂譜」 -> 自動略過校正，直接播音樂");
+    Serial.println("👉 [實體模式] 點擊網頁「▶️ 啟動實體馬達」 -> 開始執行紅外線測紙校正");
+    Serial.println("👉 [序列埠指令] 在上方輸入大寫 'S' 並發送 -> 開始執行紅外線測紙校正");
+    Serial.println("=======================================\n");
+
     bool skipCalibration = false;
     while (true) {
         server.handleClient(); 
-        if (isWebPlaying) { skipCalibration = true; break; }
+        
+        // 條件 1：網頁傳來無線樂譜，跳出迴圈並「略過」紙帶校正
+        if (isWebPlaying) { skipCalibration = true; break; } 
+        
+        // 條件 2：網頁按下啟動實體馬達，跳出迴圈並「執行」紙帶校正
+        if (isMotorRunning) { skipCalibration = false; break; } 
+        
+        // 🌟 條件 3：序列埠手動輸入 S
         if (Serial.available()) {
             char c = Serial.read();
-            if (c == 's' || c == 'S') { while(Serial.available()) Serial.read(); break; }
-        }
-        /*if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) {
-            delay(200); 
-            if (digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW) { 
-                while(digitalRead(0) == LOW || digitalRead(START_BTN_PIN) == LOW); break; 
+            if (c == 's' || c == 'S') { 
+                while(Serial.available()) Serial.read(); 
+                skipCalibration = false; 
+                break; 
             }
-        }*/
+        }
         delay(10); 
     }
+    
     if (!skipCalibration) calibrateSensors(); 
-}
+} 
 
 void loop() {
     server.handleClient(); 
@@ -505,6 +587,11 @@ void loop() {
         }
     }
     else if (isPhysicalPlaying && isMotorRunning) {
+        if (!isCalibrated) {
+            Serial.println("⚠️ 偵測到尚未校正，自動開始補測紙帶...");
+            calibrateSensors();
+            return; // 讓系統跳出這回合的 loop，下個瞬間再正式開始讀音符
+        }
         int current_binary_val = 0;
         for (int i = 0; i < 8; i++) {
             digitalWrite(pin_S0, bitRead(i, 0)); digitalWrite(pin_S1, bitRead(i, 1));

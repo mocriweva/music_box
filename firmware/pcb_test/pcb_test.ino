@@ -4,13 +4,13 @@
 #include <Stepper.h>
 
 // ==========================================
-// 📶 Wi-Fi 熱點設定 (請填入你的手機熱點資訊)
+// 📶 Wi-Fi 熱點設定
 // ==========================================
-const char* ssid = "林冰飯"; 
-const char* password = "shrimpy724"; 
+const char* ssid = "Park0421"; 
+const char* password = "20070724"; 
 
 // ==========================================
-// 🔌 硬體腳位定義 (Pin Definitions)
+// 🔌 硬體腳位定義
 // ==========================================
 #define I2S_LRC  25  
 #define I2S_BCLK 26  
@@ -23,12 +23,13 @@ const int pin_S0 = 16, pin_S1 = 17, pin_S2 = 18, pin_S3 = 19;
 const int pin_SIG = 34; 
 
 // ==========================================
-// 🎵 物理音訊引擎 (單純測試音)
+// 🎵 物理音訊引擎
 // ==========================================
 #define SAMPLE_RATE 44100
 #define NUM_SAMPLES 512
 
 volatile bool beepToggle = false; 
+volatile bool audioEnabled = false; // 音訊總開關
 
 void initI2S() {
     i2s_config_t i2s_config = {
@@ -59,7 +60,8 @@ void audioTask(void *pvParameters) {
     float targetFreq = 440.0; 
 
     while (true) {
-        float amp = beepToggle ? 10000.0 : 0.0; 
+        // 只有在測試開啟，且 beep 狀態為 true 時才有聲音
+        float amp = (audioEnabled && beepToggle) ? 10000.0 : 0.0; 
         for (int i = 0; i < NUM_SAMPLES; i++) {
             sampleBuffer[i] = (int16_t)(sin(phase) * amp);
             phase += (TWO_PI * targetFreq) / SAMPLE_RATE;
@@ -69,95 +71,159 @@ void audioTask(void *pvParameters) {
     }
 }
 
-// ⚡ 斷電釋放測試
+// ==========================================
+// 🛠️ 測試輔助與安全防護函數
+// ==========================================
 void disableStepper() {
-    digitalWrite(13, LOW);
-    digitalWrite(27, LOW);
-    digitalWrite(14, LOW);
-    digitalWrite(33, LOW);
+    digitalWrite(13, LOW); digitalWrite(27, LOW);
+    digitalWrite(14, LOW); digitalWrite(33, LOW);
+}
+
+void flushSerial() {
+    delay(10);
+    while (Serial.available()) Serial.read();
+}
+
+void waitForNextTest() {
+    Serial.println("\n✅ 測試完成！請在上方輸入框按下 [Enter] 進入下一個測試單元...");
+    flushSerial();
+    while (!Serial.available()) { delay(50); }
+    flushSerial();
+    Serial.println("====================================================");
 }
 
 // ==========================================
-// 🚀 系統初始化 (Setup)
+// 🚀 互動式系統初始化與單步測試
 // ==========================================
 void setup() {
     Serial.begin(115200);
-    delay(2000);
-    Serial.println("\n\n=== 🛠️ 專案 PCB 裸板檢測專用程式 ===");
-
-    // 1. 測試馬達初始化
+    delay(10000);
+    Serial.println("\n\n=== 🛠️ 專案 PCB 裸板安全分段檢測程式 ===");
+    
+    // 初始化所有引腳並保持斷電 (Safe State)
     myStepper.setSpeed(10);
-    disableStepper(); // 初始先斷電
-    Serial.println("✅ 馬達引腳初始化完成");
-
-    // 2. 測試多工器與感測器初始化
+    disableStepper();
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT);
     pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
     pinMode(pin_SIG, INPUT);
-    Serial.println("✅ 8通道感測器引腳初始化完成");
-
-    // 3. 測試連線至手機熱點並取得 IP
-    WiFi.mode(WIFI_STA); 
-    WiFi.begin(ssid, password);
-    Serial.printf("🔄 正在連線至 Wi-Fi: %s ", ssid);
-
-    // 等待連線 (設定最多等約 10 秒)
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\n✅ Wi-Fi 連線成功！");
-        Serial.print("🌐 裝置 IP 位址: ");
-        Serial.println(WiFi.localIP());
-    } else {
-        Serial.println("\n❌ Wi-Fi 連線超時！請檢查熱點名稱、密碼，或確認手機熱點已開啟。");
-    }
-
-    // 4. 測試音訊初始化
     initI2S();
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);
-    Serial.println("✅ I2S 音訊引擎啟動 (喇叭應開始發出嗶聲)");
-    Serial.println("====================================================\n");
-}
+    
+    Serial.println("✅ 所有腳位已初始化為安全斷電狀態。");
+    waitForNextTest();
 
-// ==========================================
-// 🔄 主迴圈 (硬體壓力與動作測試)
-// ==========================================
-unsigned long lastPrintTime = 0;
-unsigned long lastBeepTime = 0;
-
-void loop() {
-    unsigned long currentMillis = millis();
-
-    // ⚙️ [測試 1] 馬達
-    myStepper.step(-10); 
-
-    // 🎵 [測試 2] 喇叭：每 500 毫秒切換一次聲音開關 (嗶-靜音)
-    if (currentMillis - lastBeepTime > 500) {
-        beepToggle = !beepToggle;
-        lastBeepTime = currentMillis;
+    // --------------------------------------------------
+    // [關卡 1] Wi-Fi 連線測試
+    // --------------------------------------------------
+    Serial.println("🔍 [關卡 1/5] 測試 Wi-Fi 連線...");
+    WiFi.mode(WIFI_STA); 
+    WiFi.begin(ssid, password);
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500); Serial.print("."); attempts++;
     }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("\n✅ Wi-Fi 連線成功！IP: %s\n", WiFi.localIP().toString().c_str());
+    } else {
+        Serial.println("\n❌ Wi-Fi 連線失敗！(不影響後續硬體測試)");
+    }
+    waitForNextTest();
 
-    // 🔍 [測試 3] 感測器：每 300 毫秒讀取並印出一次所有通道
-    if (currentMillis - lastPrintTime > 300) {
-        lastPrintTime = currentMillis;
+    // --------------------------------------------------
+    // [關卡 2] 8 通道多工器與感測器測試
+    // --------------------------------------------------
+    Serial.println("🔍 [關卡 2/5] 測試感測器 (將持續印出數值)");
+    Serial.println("👉 [操作] 請用手遮擋感測器確認數值變化。檢查完畢請按 Enter 結束。");
+    flushSerial();
+    
+    while (!Serial.available()) {
         Serial.print("📡 感測值 | ");
-        
         for (int i = 0; i < 8; i++) {
-            digitalWrite(pin_S0, bitRead(i, 0));
-            digitalWrite(pin_S1, bitRead(i, 1));
-            digitalWrite(pin_S2, bitRead(i, 2));
-            digitalWrite(pin_S3, bitRead(i, 3));
+            digitalWrite(pin_S0, bitRead(i, 0)); digitalWrite(pin_S1, bitRead(i, 1));
+            digitalWrite(pin_S2, bitRead(i, 2)); digitalWrite(pin_S3, bitRead(i, 3));
             delayMicroseconds(5); 
-            
+            analogRead(pin_SIG); // ⚠️ 幫你補回了空讀機制，避免 MUX 殘影干擾測試
             int val = analogRead(pin_SIG); 
             Serial.printf("S%d:%4d ", i, val);
         }
         Serial.println();
-        Serial.println(WiFi.localIP());
+        delay(300);
     }
+    waitForNextTest();
+
+    // --------------------------------------------------
+    // [關卡 3] I2S 喇叭測試
+    // --------------------------------------------------
+    Serial.println("🔍 [關卡 3/5] 測試 I2S 音訊引擎");
+    Serial.println("👉 [操作] 喇叭應發出「嗶-嗶-嗶」的間斷聲。檢查完畢請按 Enter 結束。");
+    flushSerial();
+    
+    audioEnabled = true;
+    while (!Serial.available()) {
+        beepToggle = !beepToggle;
+        delay(500);
+    }
+    audioEnabled = false; // 強制靜音
+    waitForNextTest();
+
+    
+    // --------------------------------------------------
+    // [關卡 4] 步進馬達運轉測試 (連續單向旋轉與方向確認)
+    // --------------------------------------------------
+    Serial.println("🔍 [關卡 4/5] 測試步進馬達 (方向確認)");
+    Serial.println("👉 [操作] 馬達將持續以 -10 步運轉。");
+    Serial.println("請觀察並記錄馬達軸心是「順時針」還是「逆時針」轉動！");
+    Serial.println("檢查完畢請按 Enter 結束。");
+    flushSerial();
+    
+    while (!Serial.available()) {
+        myStepper.step(-10);
+        // Stepper 函式內部會根據 setSpeed 自動計算等待時間，
+        // 所以這裡不需要加 delay，馬達會平順地連續轉動。
+    }
+    disableStepper(); // 強制斷電防燒
+    waitForNextTest();
+    // --------------------------------------------------
+    // [關卡 5] 馬達腳位 PWM 輸出測試
+    // --------------------------------------------------
+    Serial.println("🔍 [關卡 5/5] 測試馬達引腳 PWM 輸出");
+    Serial.println("👉 [操作] 馬達的四根控制腳將只有一組線圈在磁化。");
+    Serial.println("檢查完畢請按 Enter 結束。");
+    flushSerial();
+    
+    int motorPins[4] = {13, 27, 14, 33};
+    
+    while (!Serial.available()) {
+        for (int p = 0; p < 4; p++) {
+            if (Serial.available()) break;
+            
+            Serial.printf("⚡ 正在測試腳位: %d (要有高頻嗡嗡聲)...\n", motorPins[p]);
+            
+            // 逐漸加壓 (單一線圈)
+            for (int duty = 0; duty <= 255; duty += 15) {
+                if (Serial.available()) break;
+                analogWrite(motorPins[p], duty);
+                delay(30);
+            }
+            // 逐漸減壓
+            for (int duty = 255; duty >= 0; duty -= 15) {
+                if (Serial.available()) break;
+                analogWrite(motorPins[p], duty);
+                delay(30);
+            }
+            
+            analogWrite(motorPins[p], 0); // 測完立刻斷電
+            delay(500); // 換腳位前的短暫停頓，讓你感覺節奏
+        }
+    }
+    disableStepper(); // 測試完畢再次徹底斷電
+
+    // ==========================================
+    Serial.println("\n🎉 PCB 裸板所有單元檢測完畢！");
+    Serial.println("硬體安全驗證通過，現在可以放心燒錄主程式了。");
+}
+
+void loop() {
+    // 測試腳本執行完畢後進入休眠
+    delay(10000); 
 }

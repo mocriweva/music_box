@@ -13,7 +13,7 @@
         .subtitle { color: #666; font-size: 0.9em; margin-bottom: 20px; }
         .controls, .export-controls, .progress-area { margin-top: 15px; display: flex; gap: 15px; align-items: center; background: #f1f1f1; padding: 15px; border-radius: 5px; flex-wrap: wrap;}
         button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; background-color: #28a745; color: white; font-weight: bold; transition: 0.2s; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        button:disabled { background-color: #ccc !important; cursor: not-allowed; color: #888 !important; }
         #stop-btn { background-color: #dc3545; }
         #pdf-btn { background-color: #007bff; }
         #wifi-btn { background-color: #17a2b8; }
@@ -22,6 +22,8 @@
         #motor-start-btn:hover:not(:disabled) { background-color: #e68a00; }
         #motor-stop-btn { background-color: #dc3545; }
         #motor-stop-btn:hover:not(:disabled) { background-color: #c82333; }
+        #wifi-stop-btn { background-color: #dc3545; }
+        #wifi-stop-btn:hover:not(:disabled) { background-color: #c82333; }
         #status { font-weight: bold; color: #0056b3; margin-top: 10px; }
         #detected-range { font-weight: bold; color: #d63384; margin-top: 5px; font-size: 1.1em; }
         .progress-area { background: #fff3cd; border-left: 5px solid #ffc107; width: 100%; box-sizing: border-box; display: none; flex-direction: column; align-items: flex-start; gap: 5px;}
@@ -84,7 +86,7 @@
             <input type="text" id="esp-ip" value="192.168.4.1" placeholder="192.168.x.x" style="width: 150px;">
         </div>
         <button id="wifi-btn" disabled>📶 無線傳送 JSON 樂譜</button>
-        <button id="wifi-stop-btn" disabled style="background-color: #dc3545;">⏹️ 停止無線播放</button>
+        <button id="wifi-stop-btn" disabled>⏹️ 停止無線播放</button>
         
         <div style="border-left: 2px solid #ccc; margin: 0 10px; height: 40px;"></div>
         
