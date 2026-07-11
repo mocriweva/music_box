@@ -5,6 +5,7 @@
 #include <driver/ledc.h>
 #include <math.h>
 #include <vector>
+#define MOTOR_DIR -1
 
 // ==========================================
 // 🌐 區域網路 (Wi-Fi) 設定
@@ -41,7 +42,7 @@ bool isMotorRunning = false;
 int playMode = 0; // 0: 實體模擬(15音), 1: 原始無損(4和弦)
 
 volatile bool motorShouldRun = false;
-volatile int motorDirection = -1; 
+volatile int motorDirection = MOTOR_DIR; 
 
 bool current_sensor_state[8] = {false};
 bool last_sensor_state[8] = {false}; 
@@ -109,8 +110,6 @@ void initLUT() {
         sineLUT[i] = sin((float)i * TWO_PI / LUT_SIZE);
     }
 }
-
-// 🌟 獨立核心 1：極速 LUT 查表合成器 (搭載線性插值平滑技術)
 // 🌟 獨立核心 1：極速 LUT 查表合成器 (8 軌混音)
 void audioTask(void *pvParameters) {
     int16_t sampleBuffer[NUM_SAMPLES];
@@ -120,7 +119,7 @@ void audioTask(void *pvParameters) {
 
     while (true) {
         bool allQuiet = true;
-        for(int v=0; v<8; v++) { // 🌟 改為 8
+        for(int v=0; v<8; v++) { 
             if(amp[v] >= 1.0 || attack[v]) { allQuiet = false; break; }
         }
 
@@ -134,7 +133,7 @@ void audioTask(void *pvParameters) {
         for (int i = 0; i < NUM_SAMPLES; i++) {
             float sample = 0;
             
-            for (int v = 0; v < 8; v++) { // 🌟 改為 8
+            for (int v = 0; v < 8; v++) { 
                 if (releaseMode[v]) {
                     amp[v] *= 0.85; 
                     if (amp[v] <= 1.0) { amp[v] = 0.0; releaseMode[v] = false; }
@@ -215,16 +214,15 @@ void silenceAll() {
     }
 }
 
-/// 🌟 新增：動態頻率音量補償 (Frequency-Dependent EQ)
+/// 🌟 動態頻率音量補償 
 float getVolumeCompensation(float freq) {
     if (freq <= 0.1) return 0.0;
     
-    // 將 sqrt 改為 0.8 次方，讓高低頻的落差更明顯
     float comp = pow(440.0 / freq, 0.8); 
     
     // 放寬補償極限
-    if (comp > 1.8) comp = 1.8;   // 允許低音稍微再大聲一點
-    if (comp < 0.2) comp = 0.2;   // 🌟 允許高音被狠狠壓到只剩 20%
+    if (comp > 1.8) comp = 1.8;   
+    if (comp < 0.2) comp = 0.2;   
     
     return comp;
 }
@@ -343,7 +341,7 @@ void calibrateSensors() {
             digitalWrite(pin_S2, bitRead(i, 2));
             digitalWrite(pin_S3, bitRead(i, 3));
             delayMicroseconds(5); 
-            analogRead(pin_SIG); // 🌟 恢復你的神來一筆：空讀消除 MUX 殘影！
+            analogRead(pin_SIG); 
             temp_sum[i] += analogRead(pin_SIG); 
         }
         delay(5);
@@ -428,7 +426,6 @@ void calibrateSensors() {
     }
     Serial.println("\n🎶 進入讀譜待命模式！(等待網頁啟動指令...)");
 
-    // 🌟 保留上一版的補測紀錄與馬達歸還機制
     isCalibrated = true;             
     motorShouldRun = prevMotorState; 
 }
@@ -437,7 +434,7 @@ void setup() {
     Serial.begin(115200); delay(1000);
 
     initMotorPWM(); motorCoilsOff(); 
-    initLUT(); // 🌟 啟動時立刻把查表陣列準備好
+    initLUT(); 
 
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT); pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
     pinMode(pin_SIG, INPUT); pinMode(0, INPUT_PULLUP); pinMode(START_BTN_PIN, INPUT_PULLUP); 
