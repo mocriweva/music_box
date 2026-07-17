@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
 #include <driver/ledc.h>
+#include <Stepper.h>
 #include <math.h>
 #include <vector>
 #define MOTOR_DIR -1
@@ -21,13 +22,9 @@ WebServer server(80);
 #define I2S_BCLK 26  
 #define I2S_DOUT 22  
 
-const int motorPins[4] = {13, 27, 14, 33};
-const int motorPWMChannels[4] = {4, 5, 6, 7}; 
-const int motorPWMFreq = 2500;   
-const int motorPWMResolution = 8; 
-
-volatile int motorPWMDuty = 200; 
-const int motorStepIntervalMs = 3; 
+// 🌟 替換：宣告 Stepper 物件 (2048 為常見 28BYJ-48 步數)
+const int stepsPerRevolution = 2048; 
+Stepper myStepper(stepsPerRevolution, 13, 27, 14, 33);
 
 const int pin_S0 = 16, pin_S1 = 17, pin_S2 = 18, pin_S3 = 19;
 const int pin_SIG = 34; 
@@ -171,47 +168,33 @@ void audioTask(void *pvParameters) {
 // ==========================================
 // ⚙️ 步進馬達與硬體控制 
 // ==========================================
-static const uint8_t stepSequence[4][4] = {
-    {1,0,1,0}, {0,1,1,0}, {0,1,0,1}, {1,0,0,1}
-};
-static int motorStepIndex = 0;
-
-void initMotorPWM() {
-    for (int p = 0; p < 4; p++) {
-        ledcSetup(motorPWMChannels[p], motorPWMFreq, motorPWMResolution);
-        ledcAttachPin(motorPins[p], motorPWMChannels[p]);
-        ledcWrite(motorPWMChannels[p], 0); 
-    }
-}
-
-void stepOnce(int dir, int duty) {
-    motorStepIndex = (motorStepIndex + dir + 4) % 4;
-    for (int p = 0; p < 4; p++) {
-        ledcWrite(motorPWMChannels[p], stepSequence[motorStepIndex][p] ? duty : 0);
-    }
-}
 
 void motorCoilsOff() {
-    for (int p = 0; p < 4; p++) ledcWrite(motorPWMChannels[p], 0);
+    // 🌟 手動斷電：防止 Stepper 函式庫預設鎖死線圈導致發熱
+    digitalWrite(13, LOW);
+    digitalWrite(27, LOW);
+    digitalWrite(14, LOW);
+    digitalWrite(33, LOW);
 }
 
 void motorTask(void *pvParameters) {
     while (true) {
         if (motorShouldRun) {
-            stepOnce(motorDirection, motorPWMDuty);
-            vTaskDelay(pdMS_TO_TICKS(motorStepIntervalMs));
+            myStepper.step(MOTOR_DIR); // 🌟 改用 Stepper 物件驅動
+            vTaskDelay(1); // 讓出 CPU 給 FreeRTOS，避免當機
         } else {
             motorCoilsOff();
-            vTaskDelay(pdMS_TO_TICKS(20));
+            vTaskDelay(20 / portTICK_PERIOD_MS);
         }
     }
 }
-
+// 🌟 升級版：平滑靜音引擎
 void silenceAll() {
     for(int v=0; v<8; v++) { 
         attack[v] = false; 
-        if (amp[v] > 1.0) releaseMode[v] = true; 
+        if (amp[v] > 1.0) releaseMode[v] = true; // 觸發平滑收尾
     }
+    delay(3); // 讓 I2S 核心有足夠的時間把聲音溜滑梯降到 0
 }
 
 /// 🌟 動態頻率音量補償 
@@ -362,8 +345,7 @@ void calibrateSensors() {
 
     // 校正階段手動推進馬達
     while (step_count < maxSearchSteps) {
-        stepOnce(motorDirection, motorPWMDuty);
-        delay(motorStepIntervalMs);
+        myStepper.step(MOTOR_DIR); 
         step_count++;
         
         bool currentStepHitBlack = false;
@@ -433,7 +415,8 @@ void calibrateSensors() {
 void setup() {
     Serial.begin(115200); delay(1000);
 
-    initMotorPWM(); motorCoilsOff(); 
+    myStepper.setSpeed(10); 
+    motorCoilsOff();
     initLUT(); 
 
     pinMode(pin_S0, OUTPUT); pinMode(pin_S1, OUTPUT); pinMode(pin_S2, OUTPUT); pinMode(pin_S3, OUTPUT);
@@ -506,14 +489,7 @@ void setup() {
         server.send(200, "text/plain", "OK");
     });
 
-    server.on("/motor/power", HTTP_GET, []() {
-        server.sendHeader("Access-Control-Allow-Origin", "*");
-        if (server.hasArg("value")) {
-            motorPWMDuty = constrain(server.arg("value").toInt(), 0, 255);
-            server.send(200, "text/plain", "OK");
-        } else server.send(400, "text/plain", "缺少 value");
-    });
-
+    
     server.begin(); 
     initI2S();
     xTaskCreatePinnedToCore(audioTask, "AudioTask", 4096, NULL, 1, NULL, 1);

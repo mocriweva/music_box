@@ -95,10 +95,7 @@
 
         <div style="border-left: 2px solid #ccc; margin: 0 10px; height: 40px;"></div>
 
-        <div class="input-group">
-            <label>⚡ 馬達功率 (PWM): <span id="motor-power-val">140</span> / 255</label>
-            <input type="range" id="motor-power-slider" min="0" max="255" value="140" style="width: 180px;">
-        </div>
+
     </div>
 
     <div class="export-controls">
@@ -519,24 +516,6 @@ async function controlHardwareMotor(state) {
 document.getElementById('motor-start-btn').addEventListener('click', () => controlHardwareMotor('start'));
 document.getElementById('motor-stop-btn').addEventListener('click', () => controlHardwareMotor('stop'));
 
-async function setMotorPower(value) {
-    const ip = document.getElementById('esp-ip').value.trim();
-    if (!ip) return;
-    try {
-        const response = await fetch(`http://${ip}/motor/power?value=${value}`);
-        if (response.ok) console.log(`📡 指令成功：馬達功率已設為 ${value}/255`);
-    } catch (err) { console.error('無法連線'); }
-}
-
-let motorPowerDebounceTimer = null;
-const motorPowerSlider = document.getElementById('motor-power-slider');
-const motorPowerVal = document.getElementById('motor-power-val');
-
-motorPowerSlider.addEventListener('input', (e) => {
-    motorPowerVal.innerText = e.target.value;
-    clearTimeout(motorPowerDebounceTimer);
-    motorPowerDebounceTimer = setTimeout(() => { setMotorPower(e.target.value); }, 150);
-});
 
 
 document.getElementById('wifi-stop-btn').addEventListener('click', async () => {
