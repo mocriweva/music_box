@@ -27,7 +27,7 @@ This is a dual-mode electronic music box project that combines physical punched 
 ## 🚀 Getting Started
 
 ### 1. Flash Firmware
-1. Open the `.ino` project file in the Arduino IDE.
+1. Open the `main.ino` project file in the Arduino IDE.
 2. Ensure the necessary Wi-Fi and WebServer libraries are installed and included.
 3. Modify `ssid` and `password` in the code to match your local Wi-Fi credentials.
 4. Compile and flash to the ESP32.
@@ -37,22 +37,23 @@ This is a dual-mode electronic music box project that combines physical punched 
 2. Open `index.html` (the web console) in your computer or mobile browser.
 3. Enter the obtained IP address into the "ESP32 IP Address" field on the left-center of the page.
 
-### 3. Operation Guide
+### 3. Operation Guide (Sorry for Only Chinese Ver. Provided)
 *   **Physical Paper Tape Playback**:
     1. Insert the punched paper tape into the sensor reading slot.
-    2. Click the "▶️ Start Physical Motor" button on the webpage or enter `S` in the Serial Monitor.
-    3. The machine will automatically perform infrared calibration and begin rolling and playing once completed.
+    2. Enter `S` in the Serial Monitor.
+    3. The machine will automatically perform infrared calibration and print the value it recognizes.
+    4. Click the "▶️ 啟動實體馬達" button on the webpage for beginning rolling and playing once completed.
 *   **Wi-Fi Digital Playback**:
     1. Select and upload the `.mid` file you want to play at the top of the webpage.
-    2. Click "📶 Send JSON Score Wirelessly".
+    2. Click "📶 無線傳送Json樂譜".
     3. Upon successful reception, the ESP32 will automatically skip physical calibration and play the music directly.
 *   **Independent Stop System**:
     The webpage provides independent "⏹️ Stop Wireless Playback" and "⏹️ Stop Physical Motor" buttons. Their states are completely decoupled and will not interfere with each other.
-
+*   **Physical structure designed**:
+    Create a laser-cut wooden or 3D-printed enclosure to add a resonance box for further low-frequency sound improvement.
 ## 🔮 Future Work
-
-*   Create a laser-cut wooden or 3D-printed enclosure to add a resonance box for further low-frequency sound improvement.
 *   Develop an automatic punch machine to directly convert exported scores from the web console into physical punched paper tapes.
+![alt text](image.png)
 
 ## 📝 License
 [MIT License](LICENSE)
