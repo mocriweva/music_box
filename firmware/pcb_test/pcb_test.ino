@@ -172,7 +172,7 @@ void setup() {
     // --------------------------------------------------
     Serial.println("🔍 [關卡 4/5] 測試步進馬達 (方向確認)");
     Serial.println("👉 [操作] 馬達將持續以 -10 步運轉。");
-    Serial.println("請觀察並記錄馬達軸心是「順時針」還是「逆時針」轉動！");
+    //Serial.println("請觀察並記錄馬達軸心是「順時針」還是「逆時針」轉動！");
     Serial.println("檢查完畢請按 Enter 結束。");
     flushSerial();
     
@@ -193,5 +193,19 @@ void setup() {
 
 void loop() {
     // 測試腳本執行完畢後進入休眠
-    delay(10000); 
+    delay(3500); 
+    if (Serial.available()) {
+        char c = Serial.read();
+        // 如果收到小寫 s 或大寫 S
+        if (c == 's' || c == 'S') { 
+            // 把緩衝區裡多餘的換行符號清空
+            while(Serial.available()) Serial.read(); 
+            
+            Serial.println("\n🔄 收到重置指令 (S)，系統即將重新啟動...");
+            delay(500); // 給序列埠一點時間把這行字印完
+            
+            // 觸發 ESP32 軟體重置，直接跳回開機狀態
+            ESP.restart(); 
+        }
+    }
 }

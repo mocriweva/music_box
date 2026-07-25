@@ -54,8 +54,6 @@ This is a dual-mode electronic music box project that combines physical punched 
 ## 🔮 Future Work
 *   Develop an automatic punch machine to directly convert exported scores from the web console into physical punched paper tapes.
 ![alt text](assets/tools/image.png)
-![alt text](assets/tools/image-1.png)
 ![alt text](assets/tools/image-3.png)
-![alt text](assets/tools/image-2.png)
 ## 📝 License
 [MIT License](LICENSE)
