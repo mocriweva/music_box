@@ -53,7 +53,7 @@ This is a dual-mode electronic music box project that combines physical punched 
     Create a laser-cut wooden or 3D-printed enclosure to add a resonance box for further low-frequency sound improvement.
 ## 🔮 Future Work
 *   Develop an automatic punch machine to directly convert exported scores from the web console into physical punched paper tapes.
-![alt text](image.png)
-
+![alt text](assets/tools/image.png)
+![alt text](assets/tools/image-1.png)
 ## 📝 License
 [MIT License](LICENSE)
