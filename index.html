@@ -250,7 +250,8 @@ function processMidiTrack(trackIndex) {
             sorted[3] || 0
         ];
     });
-
+    paperTapeData.unshift(255, 0, 0); 
+    originalScoreData.unshift([0,0,0,0], [0,0,0,0], [0,0,0,0]);
     document.getElementById('playback-progress').max = paperTapeData.length;
     document.getElementById('status').innerText = `✅ 解析完成！共 ${paperTapeData.length} 個物理網格。`;
     drawCanvas(paperTapeData, -1);
@@ -320,14 +321,34 @@ function drawCanvas(data, currentStep = -1) {
             let stateID = data[i];
             let x = ((i - startIdx) * spacingX_px) + margin;
             
-            ctx.fillStyle = "#000000";
-            ctx.fillRect(x - rectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, rectWidth, rectHeight);
-            
-            let binaryStr = stateID.toString(2).padStart(7, '0');
-            for (let bit = 0; bit < 7; bit++) {
-                if (binaryStr[bit] === '1') {
-                    let y = startY + (bit * spacingY_px) + margin;
-                    ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
+            if (stateID === 255) {
+                ctx.fillStyle = "#000000";
+                let topY = startY + margin - rectHeight/2;
+                let bottomY = startY + (7 * spacingY_px) + margin + rectHeight/2;
+                // 畫一條從上到下的粗黑線
+                ctx.fillRect(x - rectWidth/2, topY, rectWidth, bottomY - topY);
+                
+                // 畫上反白的 CAL 文字標示
+                ctx.save();
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "bold 12px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.translate(x, startY + margin + (3.5 * spacingY_px));
+                ctx.rotate(-Math.PI / 2);
+                ctx.restore();
+            } 
+            // 🌟 一般邏輯：畫出原本的打孔音符與 CLK 時脈
+            else {
+                ctx.fillStyle = "#000000";
+                ctx.fillRect(x - rectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, rectWidth, rectHeight);
+                
+                let binaryStr = stateID.toString(2).padStart(7, '0');
+                for (let bit = 0; bit < 7; bit++) {
+                    if (binaryStr[bit] === '1') {
+                        let y = startY + (bit * spacingY_px) + margin;
+                        ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
+                    }
                 }
             }
 
