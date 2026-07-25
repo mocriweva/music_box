@@ -344,22 +344,47 @@ function drawCanvas(data, currentStep = -1) {
 document.getElementById('pdf-btn').addEventListener('click', () => {
     const { jsPDF } = window.jspdf;
     drawCanvas(paperTapeData, -1);
-    
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    const canvas = document.getElementById('tapeCanvas');
-    const pdfWidth = canvas.width / MM_TO_PX;
-    const pdfHeight = canvas.height / MM_TO_PX;
-    
-    const a4Height = 200; 
-    let currentY = 0;
-    let pageNum = 1;
 
-    while (currentY < pdfHeight) {
-        if (pageNum > 1) doc.addPage();
-        doc.addImage(canvas.toDataURL('image/png', 1.0), 'PNG', 0, -currentY, pdfWidth, pdfHeight);
-        currentY += a4Height;
-        pageNum++;
+    const canvas = document.getElementById('tapeCanvas');
+    
+    // 🌟 動態計算「單條紙帶」的精確高度
+    const spacingY_px = (parseFloat(document.getElementById('spacing-y-mm').value) || 11.55) * MM_TO_PX;
+    const margin = 20 * MM_TO_PX;
+    const rowHeight = (7 * spacingY_px) + (margin * 2.5); 
+    const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 8;
+    const totalRows = Math.ceil(paperTapeData.length / stepsPerRow);
+
+    // 建立橫向 A4 的 PDF 文件
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+    for (let r = 0; r < totalRows; r++) {
+        if (r > 0) doc.addPage(); // 第一頁以後要先新增分頁
+
+        // 🌟 建立一個暫時的 Canvas，專門用來裝「這條譜」
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = canvas.width;
+        tempCanvas.height = rowHeight;
+        const tCtx = tempCanvas.getContext('2d');
+
+        // 填滿白底，避免透明背景印出來變黑的
+        tCtx.fillStyle = '#ffffff';
+        tCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+        // 從超大畫布中，精準裁切「這條譜」的範圍並貼到暫時畫布上
+        tCtx.drawImage(canvas, 0, r * rowHeight, canvas.width, rowHeight, 0, 0, canvas.width, rowHeight);
+
+        // 將像素轉換回真實世界的 mm (絕對不能縮放，確保孔位與實體機台 1:1 精準)
+        const stripWidth_mm = tempCanvas.width / MM_TO_PX;
+        const stripHeight_mm = tempCanvas.height / MM_TO_PX;
+
+        // 計算完美置中的 X, Y 座標 (A4 橫向為 297mm x 210mm)
+        const xOffset = (297 - stripWidth_mm) / 2;
+        const yOffset = (210 - stripHeight_mm) / 2;
+
+        // 貼上 PDF
+        doc.addImage(tempCanvas.toDataURL('image/png', 1.0), 'PNG', xOffset, yOffset, stripWidth_mm, stripHeight_mm);
     }
+
     doc.save('MusicBox_Physical_Tape_Final.pdf');
 });
 
