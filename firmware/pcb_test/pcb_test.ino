@@ -182,41 +182,9 @@ void setup() {
         // 所以這裡不需要加 delay，馬達會平順地連續轉動。
     }
     disableStepper(); // 強制斷電防燒
-    waitForNextTest();
-    // --------------------------------------------------
-    // [關卡 5] 馬達腳位 PWM 輸出測試
-    // --------------------------------------------------
-    Serial.println("🔍 [關卡 5/5] 測試馬達引腳 PWM 輸出");
-    Serial.println("👉 [操作] 馬達的四根控制腳將只有一組線圈在磁化。");
-    Serial.println("檢查完畢請按 Enter 結束。");
-    flushSerial();
+    //waitForNextTest();
     
-    int motorPins[4] = {13, 27, 14, 33};
-    
-    while (!Serial.available()) {
-        for (int p = 0; p < 4; p++) {
-            if (Serial.available()) break;
-            
-            Serial.printf("⚡ 正在測試腳位: %d (要有高頻嗡嗡聲)...\n", motorPins[p]);
-            
-            // 逐漸加壓 (單一線圈)
-            for (int duty = 0; duty <= 255; duty += 15) {
-                if (Serial.available()) break;
-                analogWrite(motorPins[p], duty);
-                delay(30);
-            }
-            // 逐漸減壓
-            for (int duty = 255; duty >= 0; duty -= 15) {
-                if (Serial.available()) break;
-                analogWrite(motorPins[p], duty);
-                delay(30);
-            }
-            
-            analogWrite(motorPins[p], 0); // 測完立刻斷電
-            delay(500); // 換腳位前的短暫停頓，讓你感覺節奏
-        }
-    }
-    disableStepper(); // 測試完畢再次徹底斷電
+    //disableStepper(); // 測試完畢再次徹底斷電
 
     // ==========================================
     Serial.println("\n🎉 PCB 裸板所有單元檢測完畢！");
