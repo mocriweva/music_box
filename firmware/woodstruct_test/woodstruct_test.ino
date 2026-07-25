@@ -61,7 +61,7 @@ void calibrateSensors() {
     bool blackLinePassed = false;   
     int bufferSteps = 0;
     const int bufferLimit = 40;     
-    const int maxSearchSteps = 3000; 
+    const int maxSearchSteps = 9000; 
     int step_count = 0;
 
     while (step_count < maxSearchSteps) {
@@ -126,7 +126,7 @@ void calibrateSensors() {
                       i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
         delay(5); 
     }
-    Serial.println("\n🏁 初始化測試結束，馬達將進入無限運轉模式...");
+    //Serial.println("\n🏁 初始化測試結束，馬達將進入無限運轉模式...");
 
     isCalibrated = true;             
     motorShouldRun = prevMotorState; 
@@ -151,11 +151,23 @@ void setup() {
     motorCoilsOff();
 
     Serial.println("\n\n===================================");
-    Serial.println("🛠️ 硬體組裝測試程式啟動");
+    Serial.println("🛠️ 硬體組裝測試程式 輸入s啟動");
     Serial.println("===================================");
 
     // 3. 執行紅外線初始化測試
-    calibrateSensors(); 
+    /*while(1){
+        if (Serial.available()) {
+            char c = Serial.read();
+            
+            // 如果收到小寫 s 或大寫 S
+            if (c == 's' || c == 'S') { 
+                calibrateSensors(); 
+            }
+        }
+        break;
+    }
+    motorCoilsOff();
+    */
 }
 
 void loop() {
@@ -168,24 +180,15 @@ void loop() {
             // 把緩衝區裡多餘的換行符號清空
             while(Serial.available()) Serial.read(); 
             
-            // 🌟 核心修改：反轉馬達的運轉狀態 (開變關、關變開)
-            motorShouldRun = !motorShouldRun; 
+            Serial.println("\n🔄 收到指令 (S)，手動觸發紅外線校正程序...");
             
-            if (motorShouldRun) {
-                Serial.println("▶️ 測試馬達已啟動！(再次輸入 s 停止)");
-            } else {
-                Serial.println("⏹️ 測試馬達已停止！(再次輸入 s 啟動)");
-                motorCoilsOff(); // 🌟 重要：停止時立刻斷電，防止馬達發燙
-            }
+            // 🌟 核心修改：直接呼叫校正函式
+            calibrateSensors(); 
+            
+            Serial.println("✅ 本次校正測試完畢！(再次輸入 s 可重新測試)");
         }
     }
 
-    // 2. 根據目前的狀態決定馬達動作
-    if (motorShouldRun) {
-        myStepper.step(MOTOR_DIR);
-        delay(1); // 運轉時的微小延遲
-    } else {
-        delay(20); // 停止時的較長延遲，讓出 CPU 資源避免當機
-    }
-
+    // 2. 空迴圈中加入微小延遲，讓出 CPU 資源避免當機
+    delay(20); 
 }

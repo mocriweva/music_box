@@ -340,7 +340,7 @@ void calibrateSensors() {
     bool blackLinePassed = false;   
     int bufferSteps = 0;
     const int bufferLimit = 40;     
-    const int maxSearchSteps = 3000; 
+    const int maxSearchSteps = 9000; 
     int step_count = 0;
 
     // 校正階段手動推進馬達
