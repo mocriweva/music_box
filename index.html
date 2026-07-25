@@ -250,8 +250,14 @@ function processMidiTrack(trackIndex) {
             sorted[3] || 0
         ];
     });
-    paperTapeData.unshift(255, 0, 0); 
-    originalScoreData.unshift([0,0,0,0], [0,0,0,0], [0,0,0,0]);
+    paperTapeData.unshift(254, 254, 254, 255, 254, 254); 
+    
+    // 原始無損陣列也要同步對齊長度 (總共 6 個步驟)
+    originalScoreData.unshift(
+        [0,0,0,0], [0,0,0,0], [0,0,0,0], // 對應前面的 3 步白
+        [0,0,0,0],                       // 對應黑線 (無損模式不發聲)
+        [0,0,0,0], [0,0,0,0]             // 對應後面的 2 步白
+    );
     document.getElementById('playback-progress').max = paperTapeData.length;
     document.getElementById('status').innerText = `✅ 解析完成！共 ${paperTapeData.length} 個物理網格。`;
     drawCanvas(paperTapeData, -1);
@@ -303,8 +309,6 @@ function drawCanvas(data, currentStep = -1) {
         for (let i = 0; i < 8; i++) {
             let lineY = startY + (i * spacingY_px) + margin;
             ctx.beginPath(); ctx.moveTo(margin, lineY); ctx.lineTo(margin + rowWidth, lineY); ctx.stroke();
-            ctx.fillStyle = (i === 7) ? "#d63384" : "#444444"; 
-            ctx.fillText((i === 7) ? "CLK" : `D${i+1}`, margin - 10, lineY);
         }
 
         ctx.fillStyle = "#007bff"; ctx.textAlign = "left";
@@ -321,14 +325,13 @@ function drawCanvas(data, currentStep = -1) {
             let stateID = data[i];
             let x = ((i - startIdx) * spacingX_px) + margin;
             
+            // 🌟 特殊邏輯 1：若為 255，畫出貫穿 8 軌的實心校正條
             if (stateID === 255) {
                 ctx.fillStyle = "#000000";
                 let topY = startY + margin - rectHeight/2;
                 let bottomY = startY + (7 * spacingY_px) + margin + rectHeight/2;
-                // 畫一條從上到下的粗黑線
                 ctx.fillRect(x - rectWidth/2, topY, rectWidth, bottomY - topY);
                 
-                // 畫上反白的 CAL 文字標示
                 ctx.save();
                 ctx.fillStyle = "#ffffff";
                 ctx.font = "bold 12px Arial";
@@ -338,20 +341,28 @@ function drawCanvas(data, currentStep = -1) {
                 ctx.rotate(-Math.PI / 2);
                 ctx.restore();
             } 
-            // 🌟 一般邏輯：畫出原本的打孔音符與 CLK 時脈
+            // 🌟 特殊邏輯 2：若為 254，完完全全留白（最前面的緩衝區）
+            else if (stateID === 254) {
+                // 什麼都不做，保持純白紙帶
+            }
+            // 🌟 一般邏輯：包含休止符(0)與正常音符(1~120)
             else {
                 ctx.fillStyle = "#000000";
+                
+                // 無論如何，都先畫出最底下的 CLK 時脈孔
                 ctx.fillRect(x - rectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, rectWidth, rectHeight);
                 
-                let binaryStr = stateID.toString(2).padStart(7, '0');
-                for (let bit = 0; bit < 7; bit++) {
-                    if (binaryStr[bit] === '1') {
-                        let y = startY + (bit * spacingY_px) + margin;
-                        ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
+                // 只有當數值大於 0（有音符）時，才畫出 D1~D7 資料孔
+                if (stateID > 0) {
+                    let binaryStr = stateID.toString(2).padStart(7, '0');
+                    for (let bit = 0; bit < 7; bit++) {
+                        if (binaryStr[bit] === '1') {
+                            let y = startY + (bit * spacingY_px) + margin;
+                            ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
+                        }
                     }
                 }
             }
-
             if (i === currentStep) {
                 ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
                 ctx.fillRect(x - spacingX_px/2, startY, spacingX_px, rowHeight);
