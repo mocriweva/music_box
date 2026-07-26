@@ -6,8 +6,8 @@
 // ==========================================
 // 📶 Wi-Fi 熱點設定
 // ==========================================
-const char* ssid = "Park0421"; 
-const char* password = "20070724"; 
+const char* ssid = "林冰飯"; 
+const char* password = "shrimpy724"; 
 
 // ==========================================
 // 🔌 硬體腳位定義
@@ -97,7 +97,7 @@ void waitForNextTest() {
 // ==========================================
 void setup() {
     Serial.begin(115200);
-    delay(10000);
+    delay(5000);
     Serial.println("\n\n=== 🛠️ 專案 PCB 裸板安全分段檢測程式 ===");
     
     // 初始化所有引腳並保持斷電 (Safe State)
@@ -188,7 +188,7 @@ void setup() {
 
     // ==========================================
     Serial.println("\n🎉 PCB 裸板所有單元檢測完畢！");
-    Serial.println("硬體安全驗證通過，現在可以放心燒錄主程式了。");
+    Serial.println("硬體安全驗證通過，可以開始睡了。");
 }
 
 void loop() {

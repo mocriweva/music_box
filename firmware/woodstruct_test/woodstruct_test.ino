@@ -83,7 +83,7 @@ void calibrateSensors() {
             if (val > baseline_black[i]) {
                 baseline_black[i] = val; 
             }
-            if (val > (baseline_white[i] + 800)) {
+            if (val > (baseline_white[i] + 1000)) {
                 currentStepHitBlack = true;
             }
         }
@@ -137,7 +137,7 @@ void calibrateSensors() {
 // ==========================================
 void setup() {
     Serial.begin(115200);
-    delay(1000);
+    delay(7000);
 
     // 1. 初始化 MUX 與紅外線腳位
     pinMode(pin_S0, OUTPUT); 

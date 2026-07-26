@@ -351,8 +351,11 @@ function drawCanvas(data, currentStep = -1) {
             else {
                 ctx.fillStyle = "#000000";
                 
-                // 無論如何，都先畫出最底下的 CLK 時脈孔
-                ctx.fillRect(x - rectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, rectWidth, rectHeight);
+                // 👇 🌟 核心修正：計算縮短版的最底層時脈孔寬度 (目前設定為資料孔的 50%)
+                let clkRectWidth = rectWidth * 0.75; 
+                
+                // 畫出最底下的 CLK 時脈孔 (使用縮短後的 clkRectWidth 並完美置中)
+                ctx.fillRect(x - clkRectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, clkRectWidth, rectHeight);
                 
                 // 只有當數值大於 0（有音符）時，才畫出 D1~D7 資料孔
                 if (stateID > 0) {
@@ -360,6 +363,8 @@ function drawCanvas(data, currentStep = -1) {
                     for (let bit = 0; bit < 7; bit++) {
                         if (binaryStr[bit] === '1') {
                             let y = startY + (bit * spacingY_px) + margin;
+                            
+                            // 資料孔維持原本的寬度 (rectWidth)
                             ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
                         }
                     }
