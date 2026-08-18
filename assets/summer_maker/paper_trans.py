@@ -1,7 +1,7 @@
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 
-def generate_test_sheet(filename="do_to_si_A4_Pages.pdf"):
+def generate_test_sheet(filename="do_to_si_A_Pages.pdf"):
     # ==========================================
     # 🎵 音樂設定：Do 到 Si (對應 ESP32 defaultFreqs 索引)
     # ==========================================

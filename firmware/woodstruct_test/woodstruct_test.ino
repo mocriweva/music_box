@@ -5,7 +5,7 @@
 // ==========================================
 const int stepsPerRevolution = 2048; 
 Stepper myStepper(stepsPerRevolution, 13, 27, 14, 33);
-#define MOTOR_DIR 1 
+#define MOTOR_DIR -1 
 
 const int pin_S0 = 16, pin_S1 = 17, pin_S2 = 18, pin_S3 = 19;
 const int pin_SIG = 34; 

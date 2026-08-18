@@ -6,13 +6,13 @@
 #include <Stepper.h>
 #include <math.h>
 #include <vector>
-#define MOTOR_DIR -1
+#define MOTOR_DIR -100
 
 // ==========================================
 // 🌐 區域網路 (Wi-Fi) 設定
 // ==========================================
-const char* ssid = "ED417C";       
-const char* password = "4172417@"; 
+const char* ssid = "100111010";       
+const char* password = "shrimpy724";
 WebServer server(80);
 
 // ==========================================
@@ -399,8 +399,8 @@ void calibrateSensors() {
     for (int i = 0; i < 8; i++) {
         int delta = baseline_black[i] - baseline_white[i];
         if (delta < 200) delta = 500;
-        jump_up[i] = delta * 0.6;   
-        jump_down[i] = delta * 0.4; 
+        jump_up[i] = delta * 0.5;   
+        jump_down[i] = delta * 0.25; 
         
         Serial.printf("通道[%d] 白:%4d | 黑:%4d | 觸發區間: +%d ~ +%d\n", 
                       i, baseline_white[i], baseline_black[i], jump_down[i], jump_up[i]);
@@ -571,12 +571,18 @@ void loop() {
             digitalWrite(pin_S2, bitRead(i, 2)); digitalWrite(pin_S3, bitRead(i, 3));
             delayMicroseconds(5); 
             int val = analogRead(pin_SIG); val = analogRead(pin_SIG); 
+            
+            // 🌟 移除所有邏輯反轉，直接將物理通道 i 的數據存入對應陣列
             if (val > (baseline_white[i] + jump_up[i])) current_sensor_state[i] = true;
             else if (val < (baseline_white[i] + jump_down[i])) current_sensor_state[i] = false;
-            if (current_sensor_state[i] && i < 7) current_binary_val += (1 << i); 
+            
+            // 🌟 直接套用位移運算：i=0 對應 Track 0 (LSB)，完美契合 Python 紙帶
+            if (current_sensor_state[i] && i >0 ) {
+                current_binary_val += (1 << (i-1)); 
+            }
         }
 
-        if (current_sensor_state[7] && !last_sensor_state[7]) {
+        if (current_sensor_state[0] && !last_sensor_state[0]) {
             if (current_binary_val > 0) decodePhysicalState(current_binary_val); 
         } 
         for (int i = 0; i < 8; i++) last_sensor_state[i] = current_sensor_state[i];

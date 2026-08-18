@@ -280,13 +280,18 @@ function drawCanvas(data, currentStep = -1) {
     const spacingX_px = (parseFloat(document.getElementById('spacing-x-mm').value) || 30) * MM_TO_PX;
     const spacingY_px = (parseFloat(document.getElementById('spacing-y-mm').value) || 11.55) * MM_TO_PX;
     const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 8;
-    const rectWidth = spacingX_px * 0.4; 
-    const rectHeight = 4 * MM_TO_PX; 
-    const margin = 20 * MM_TO_PX; 
+    // 👇 🌟 從 Python 完美移植的精確尺寸
+    const rectWidth = 18 * MM_TO_PX;     // black_length = 18mm
+    const rectHeight = 5 * MM_TO_PX;     // note_height = 5mm
+    const clkRectWidth = 10 * MM_TO_PX;  // clock_length = 10mm
+    const clockOffset = 4 * MM_TO_PX;    // clock_offset = 4mm
+    const margin = 10.05 * MM_TO_PX;     // margin = 10.05mm
     
     const totalRows = Math.ceil(data.length / stepsPerRow);
-    const rowHeight = (7 * spacingY_px) + (margin * 2.5); 
+    const rowHeight = (7 * spacingY_px) + (margin * 2); // 配合新 margin 修正總高度
 
+    canvas.width = (Math.min(data.length, stepsPerRow) * spacingX_px) + (margin * 2.5);
+    canvas.height = totalRows * rowHeight;
     canvas.width = (Math.min(data.length, stepsPerRow) * spacingX_px) + (margin * 2.5);
     canvas.height = totalRows * rowHeight;
     
@@ -299,11 +304,13 @@ function drawCanvas(data, currentStep = -1) {
         let rowWidth = (actualStepsInThisRow * spacingX_px);
         
         ctx.setLineDash([5, 5]); ctx.strokeStyle = "#aaaaaa"; ctx.lineWidth = 1;
-        ctx.strokeRect(margin/2, startY + margin/2, rowWidth + margin*1.5, (7 * spacingY_px) + margin);
+        
+        // 🌟 核心修正：Y 軸起點改為 startY，高度直接使用包含雙 margin 的 rowHeight！
+        ctx.strokeRect(margin / 2, startY + 1, rowWidth + (margin * 1.5), rowHeight - 2);
         ctx.setLineDash([]); 
         
         ctx.font = "14px Arial"; ctx.fillStyle = "#888888";
-        ctx.fillText("✂️ 沿虛線裁切", margin/2 + 5, startY + margin/2 - 5);
+        ctx.fillText("✂️ 沿虛線裁切", margin / 2 + 5, startY + 15);
 
         ctx.lineWidth = 1; ctx.strokeStyle = "#e0e0e0"; ctx.font = "bold 12px Arial";
         ctx.textAlign = "right"; ctx.textBaseline = "middle";
@@ -313,11 +320,13 @@ function drawCanvas(data, currentStep = -1) {
             ctx.beginPath(); ctx.moveTo(margin, lineY); ctx.lineTo(margin + rowWidth, lineY); ctx.stroke();
         }
 
-        ctx.fillStyle = "#007bff"; ctx.textAlign = "left";
-        if (row > 0) ctx.fillText(`◄ 黏接 第 ${row} 段`, margin, startY + margin/2 + 15);
+        ctx.fillStyle = "#aaaaaa"; // 🌟 改成淺灰色，降低紅外線誤判風險
+        ctx.textAlign = "left";
+        // 🌟 將 Y 座標移至 startY - 8 (也就是灰色虛線框的外面上方)
+        if (row > 0) ctx.fillText(`◄ 黏接 第 ${row} 段`, margin, startY - 10);
         if (row < totalRows - 1) {
             ctx.textAlign = "right";
-            ctx.fillText(`黏接 第 ${row + 2} 段 ►`, margin + rowWidth, startY + margin/2 + 15);
+            ctx.fillText(`黏接 第 ${row + 2} 段 ►`, margin + rowWidth, startY - 10);
         }
 
         let startIdx = row * stepsPerRow;
@@ -325,56 +334,57 @@ function drawCanvas(data, currentStep = -1) {
         
         for (let i = startIdx; i < endIdx; i++) {
             let stateID = data[i];
-            let x = ((i - startIdx) * spacingX_px) + margin;
-            
-            // 🌟 特殊邏輯 1：若為 255，畫出貫穿 8 軌的實心校正條
+            let x = ((i - startIdx) * spacingX_px) + margin; // 🌟 現在 x 代表「左側邊緣」
+
+            // 🌟 特殊邏輯 1：255 畫出貫穿全軌的實心校正條
             if (stateID === 255) {
                 ctx.fillStyle = "#000000";
                 let topY = startY + margin - rectHeight/2;
                 let bottomY = startY + (7 * spacingY_px) + margin + rectHeight/2;
-                ctx.fillRect(x - rectWidth/2, topY, rectWidth, bottomY - topY);
+                ctx.fillRect(x, topY, rectWidth, bottomY - topY); // 從 x 往右畫 18mm
                 
                 ctx.save();
                 ctx.fillStyle = "#ffffff";
                 ctx.font = "bold 12px Arial";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                ctx.translate(x, startY + margin + (3.5 * spacingY_px));
+                ctx.translate(x + rectWidth/2, startY + margin + (3.5 * spacingY_px));
                 ctx.rotate(-Math.PI / 2);
                 ctx.restore();
             } 
-            // 🌟 特殊邏輯 2：若為 254，完完全全留白（最前面的緩衝區）
+            // 🌟 特殊邏輯 2：254 純白緩衝區
             else if (stateID === 254) {
-                // 什麼都不做，保持純白紙帶
+                // 保持留白，不繪製任何東西
             }
-            // 🌟 一般邏輯：包含休止符(0)與正常音符(1~120)
+            // 🌟 一般邏輯：包含正常音符與休止符
             else {
                 ctx.fillStyle = "#000000";
                 
-                // 👇 🌟 核心修正：計算縮短版的最底層時脈孔寬度 (目前設定為資料孔的 50%)
-                let clkRectWidth = rectWidth * 0.75; 
+                // 畫出 CLK 時脈孔 (加入 clockOffset，寬度改為 clkRectWidth)
+                let clkY = startY + (7 * spacingY_px) + margin;
+                ctx.fillRect(x + clockOffset, clkY - rectHeight/2, clkRectWidth, rectHeight);
                 
-                // 畫出最底下的 CLK 時脈孔 (使用縮短後的 clkRectWidth 並完美置中)
-                ctx.fillRect(x - clkRectWidth/2, startY + (7 * spacingY_px) + margin - rectHeight/2, clkRectWidth, rectHeight);
-                
-                // 只有當數值大於 0（有音符）時，才畫出 D1~D7 資料孔
+                // 畫出 D1~D7 資料孔 (寬度維持 rectWidth)
                 if (stateID > 0) {
                     let binaryStr = stateID.toString(2).padStart(7, '0');
                     for (let bit = 0; bit < 7; bit++) {
                         if (binaryStr[bit] === '1') {
                             let y = startY + (bit * spacingY_px) + margin;
-                            
-                            // 資料孔維持原本的寬度 (rectWidth)
-                            ctx.fillRect(x - rectWidth/2, y - rectHeight/2, rectWidth, rectHeight);
+                            ctx.fillRect(x, y - rectHeight/2, rectWidth, rectHeight);
                         }
                     }
                 }
             }
+
+            // 🔴 繪製網頁預覽播放時的紅色掃描線
             if (i === currentStep) {
                 ctx.fillStyle = "rgba(255, 0, 0, 0.2)";
-                ctx.fillRect(x - spacingX_px/2, startY, spacingX_px, rowHeight);
+                ctx.fillRect(x, startY, spacingX_px, rowHeight);
                 ctx.strokeStyle = "#ff0000"; ctx.lineWidth = 2;
-                ctx.beginPath(); ctx.moveTo(x, startY + margin/2); ctx.lineTo(x, startY + margin/2 + (7 * spacingY_px) + margin); ctx.stroke();
+                ctx.beginPath(); 
+                ctx.moveTo(x + rectWidth/2, startY + margin/2); 
+                ctx.lineTo(x + rectWidth/2, startY + rowHeight - margin/2); 
+                ctx.stroke();
             }
         }
     }
@@ -386,10 +396,10 @@ document.getElementById('pdf-btn').addEventListener('click', () => {
 
     const canvas = document.getElementById('tapeCanvas');
     
-    // 🌟 動態計算「單條紙帶」的精確高度
+    // 🌟 動態計算「單條紙帶」的精確高度 (同步更新為 10.05mm 邊界)
     const spacingY_px = (parseFloat(document.getElementById('spacing-y-mm').value) || 11.55) * MM_TO_PX;
-    const margin = 20 * MM_TO_PX;
-    const rowHeight = (7 * spacingY_px) + (margin * 2.5); 
+    const margin = 10.05 * MM_TO_PX; 
+    const rowHeight = (7 * spacingY_px) + (margin * 2);
     const stepsPerRow = parseInt(document.getElementById('steps-per-row').value) || 8;
     const totalRows = Math.ceil(paperTapeData.length / stepsPerRow);
 
